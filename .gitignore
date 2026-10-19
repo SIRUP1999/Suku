@@ -1,0 +1,12 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.sqlite3
+staticfiles/
+media/
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
