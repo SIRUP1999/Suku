@@ -69,6 +69,40 @@ class SchoolClassSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100, trim_whitespace=True)
 
 
+class StudentAdminSerializer(serializers.ModelSerializer):
+    class_name = serializers.CharField(source="school_class.name", read_only=True, allow_null=True)
+    total_attempts = serializers.IntegerField(read_only=True)
+    average_score = serializers.FloatField(read_only=True, allow_null=True)
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "username",
+            "first_name",
+            "last_name",
+            "class_name",
+            "is_active",
+            "total_attempts",
+            "average_score",
+        )
+
+
+class StudentStatusSerializer(serializers.Serializer):
+    is_active = serializers.BooleanField()
+
+
+class StudentPasswordResetSerializer(serializers.Serializer):
+    password = serializers.CharField(min_length=8, trim_whitespace=False, write_only=True)
+
+    def validate(self, attrs):
+        try:
+            validate_password(attrs["password"], user=self.context["user"])
+        except DjangoValidationError as error:
+            raise serializers.ValidationError({"password": error.messages}) from error
+        return attrs
+
+
 class AttemptResultSerializer(serializers.ModelSerializer):
     question_prompt = serializers.CharField(source="question.prompt", read_only=True)
     subject = serializers.CharField(source="question.topic.subject.name", read_only=True)

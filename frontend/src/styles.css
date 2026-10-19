@@ -185,6 +185,7 @@ th, td { border-top: 1px solid #eff1ee; padding: 12px 9px; white-space: nowrap; 
 td { color: #536359; }
 .creator-panel { margin: 0 0 18px; }
 .creator-panel .panel-heading { margin-bottom: 0; }
+.csv-help { margin: 10px 0 0; color: #879189; font-size: 11px; line-height: 1.5; }
 .student-form { padding-top: 18px; display: grid; gap: 14px; }
 .student-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; padding-bottom: 14px; border-bottom: 1px solid #eff1ee; }
 .student-row-label { grid-column: 1 / -1; color: #64806b; font-size: 11px; font-weight: 700; }
@@ -192,6 +193,40 @@ td { color: #536359; }
 .student-form input, .student-form select, .login-form input { width: 100%; border: 1px solid #dfe5df; border-radius: 7px; padding: 11px 12px; background: #fff; color: #324538; font-size: 13px; }
 .student-form-actions { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .remove-student { justify-self: start; border: 0; background: transparent; color: #a36852; font-size: 11px; padding: 2px; }
+.creator-actions { display: flex; gap: 8px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.button-disabled { opacity: .6; cursor: wait; }
+.student-status { display: inline-flex; border-radius: 20px; padding: 5px 8px; font-size: 10px; font-weight: 700; }
+.student-active { color: #47764e; background: #eaf4e9; }
+.student-inactive { color: #8b6842; background: #f5eee5; }
+.student-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.table-action { padding: 3px 0; border: 0; background: transparent; color: #356c49; font-size: 10px; font-weight: 600; white-space: nowrap; }
+.table-action:disabled { opacity: .5; cursor: wait; }
+.reset-password-form { display: flex; gap: 5px; margin-top: 7px; min-width: 235px; }
+.reset-password-form input { flex: 1; min-width: 120px; border: 1px solid #dfe5df; border-radius: 6px; padding: 7px; font-size: 10px; }
+.reset-password-form .button { min-height: 31px; padding: 0 9px; font-size: 10px; }
+.student-performance { margin-top: 20px; padding-top: 19px; border-top: 1px solid #e9ece7; }
+.student-performance .panel-heading { margin-bottom: 13px; }
+.performance-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.performance-summary > div { display: grid; gap: 5px; padding: 12px; border: 1px solid #edf0eb; border-radius: 8px; background: #fbfcfa; }
+.performance-summary span { color: #7e8b81; font-size: 10px; }
+.performance-summary strong { color: #344e3b; font: 700 18px "Manrope", sans-serif; }
+.performance-subjects { display: grid; gap: 12px; margin-top: 14px; }
+.performance-subject { padding: 14px; border: 1px solid #edf0eb; border-radius: 8px; }
+.performance-subject-heading, .performance-topic { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.performance-subject-heading > strong { color: #3e5445; font: 700 13px "Manrope", sans-serif; }
+.performance-topics { display: grid; gap: 11px; margin-top: 12px; padding-top: 12px; border-top: 1px solid #eff1ee; }
+.performance-topic > span { display: grid; gap: 4px; color: #536359; font-size: 11px; }
+.performance-topic small, .performance-score > small { color: #89948c; font-size: 9px; }
+.performance-score { width: min(190px, 45%); display: grid; gap: 5px; }
+.performance-score-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.performance-score-label strong { color: #536359; font-size: 10px; }
+.performance-score .progress-track { height: 5px; }
+.performance-badge { border-radius: 20px; padding: 4px 7px; font-size: 9px; font-weight: 700; white-space: nowrap; }
+.performance-strong { color: #47764e; background: #eaf4e9; }
+.performance-building { color: #8b6842; background: #f8f1df; }
+.performance-support { color: #a26853; background: #f9eee9; }
+.performance-unscored { color: #6f7d73; background: #eef1ed; }
 .success-notice { display: flex; gap: 8px; align-items: start; padding-top: 16px; color: #4b7c55; font-size: 12px; line-height: 1.5; }
 .alert { display: flex; gap: 9px; align-items: center; padding: 11px 13px; border: 1px solid #edd4c9; border-radius: 8px; color: #8b503b; background: #fff8f4; margin-bottom: 16px; font-size: 12px; }
 .alert button { display: inline-flex; margin-left: auto; border: 0; background: transparent; color: inherit; }

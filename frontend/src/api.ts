@@ -7,6 +7,7 @@ export type User = {
   last_name: string;
   role: "school_admin" | "student" | "teacher";
   school_name: string | null;
+  school_code: string | null;
 };
 
 export type Subject = { id: number; name: string; slug: string; description: string; topic_count: number };
@@ -21,6 +22,48 @@ export type Topic = {
 };
 export type SchoolClass = { id: number; name: string };
 export type NewStudent = { username: string; password: string; first_name: string; last_name: string; class_id: number | null };
+export type SchoolStudent = {
+  id: number;
+  username: string;
+  first_name: string;
+  last_name: string;
+  class_name: string | null;
+  is_active: boolean;
+  total_attempts: number;
+  average_score: number | null;
+};
+export type StudentPerformance = {
+  student: {
+    id: number;
+    username: string;
+    first_name: string;
+    last_name: string;
+    class_name: string | null;
+    is_active: boolean;
+  };
+  summary: {
+    total_attempts: number;
+    correct_attempts: number;
+    scored_attempts: number;
+    average_score: number | null;
+  };
+  subjects: Array<{
+    subject_id: number;
+    subject: string;
+    attempts: number;
+    correct_attempts: number;
+    scored_attempts: number;
+    average_score: number | null;
+    topics: Array<{
+      topic_id: number;
+      topic: string;
+      attempts: number;
+      correct_attempts: number;
+      scored_attempts: number;
+      average_score: number | null;
+    }>;
+  }>;
+};
 export type Question = {
   id: number;
   topic: number;
@@ -55,7 +98,7 @@ export type Report = {
   subscription: { term_name: string; starts_at: string; ends_at: string; seat_limit: number; status: string; is_current: boolean } | null;
   summary: { total_attempts: number; correct_attempts: number; average_score: number };
   subjects: Array<{ question__topic__subject__id: number; question__topic__subject__name: string; attempts: number; correct: number; average_score: number | null }>;
-  students: Array<{ id: number; username: string; first_name: string; last_name: string; total_attempts: number; average_score: number | null }>;
+  students: Array<{ id: number; username: string; first_name: string; last_name: string; class_name: string | null; is_active: boolean; total_attempts: number; average_score: number | null }>;
 };
 
 type Tokens = { access: string; refresh: string; user: User };
@@ -81,7 +124,7 @@ export function setTokens(access: string, refresh: string) {
 
 async function request<T>(path: string, options: RequestInit = {}, mayRefresh = true): Promise<T> {
   const headers = new Headers(options.headers);
-  headers.set("Content-Type", "application/json");
+  if (!(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(`${API_URL}${path}`, { ...options, headers });
@@ -110,11 +153,12 @@ async function request<T>(path: string, options: RequestInit = {}, mayRefresh = 
 }
 
 export const api = {
-  login: (username: string, password: string) =>
-    request<Tokens>("/auth/login/", { method: "POST", body: JSON.stringify({ username, password }) }),
+  login: (school_code: string, username: string, password: string) =>
+    request<Tokens>("/auth/login/", { method: "POST", body: JSON.stringify({ school_code, username, password }) }),
   me: () => request<User>("/auth/me/"),
   subjects: () => request<Subject[]>("/subjects/"),
   topics: (subjectId: number) => request<Topic[]>(`/subjects/${subjectId}/topics/`),
+  topic: (topicId: number) => request<Topic>(`/topics/${topicId}/`),
   questions: (topicId: number) => request<Question[]>(`/topics/${topicId}/questions/`),
   submit: (questionId: number, answer: string) =>
     request<Attempt>("/attempts/", { method: "POST", body: JSON.stringify({ question_id: questionId, answer }) }),
@@ -132,6 +176,27 @@ export const api = {
     request<{ created: number; usernames: string[] }>("/admin/students/bulk-create/", {
       method: "POST",
       body: JSON.stringify({ students }),
+    }),
+  importStudents: (file: File) => {
+    const data = new FormData();
+    data.set("file", file);
+    return request<{ created: number; usernames: string[] }>("/admin/students/import/", {
+      method: "POST",
+      body: data,
+    });
+  },
+  students: () => request<SchoolStudent[]>("/admin/students/"),
+  studentPerformance: (studentId: number) =>
+    request<StudentPerformance>(`/admin/students/${studentId}/performance/`),
+  updateStudent: (studentId: number, is_active: boolean) =>
+    request<SchoolStudent>(`/admin/students/${studentId}/`, {
+      method: "PATCH",
+      body: JSON.stringify({ is_active }),
+    }),
+  resetStudentPassword: (studentId: number, password: string) =>
+    request<{ detail: string }>(`/admin/students/${studentId}/reset-password/`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
     }),
 };
 

@@ -1,5 +1,6 @@
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, UnicodeUsernameValidator
 from django.db import models
+from django.db.models.functions import Lower
 from django.utils import timezone
 
 
@@ -46,6 +47,11 @@ class User(AbstractUser):
         STUDENT = "student", "Student"
         TEACHER = "teacher", "Teacher"
 
+    username = models.CharField(
+        max_length=150,
+        validators=[UnicodeUsernameValidator()],
+        error_messages={"unique": "A user with that username already exists."},
+    )
     role = models.CharField(
         max_length=20, choices=Role.choices, default=Role.SCHOOL_ADMIN
     )
@@ -59,6 +65,21 @@ class User(AbstractUser):
         null=True,
         blank=True,
     )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                Lower("username"),
+                "school",
+                condition=models.Q(school__isnull=False),
+                name="unique_username_per_school",
+            ),
+            models.UniqueConstraint(
+                Lower("username"),
+                condition=models.Q(school__isnull=True),
+                name="unique_global_username",
+            ),
+        ]
 
     def clean(self):
         super().clean()

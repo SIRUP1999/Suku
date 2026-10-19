@@ -1,6 +1,11 @@
+import csv
+import io
+
 from django.db import IntegrityError, transaction
-from django.db.models import Avg, Count, Q
+from django.db.models import Avg, Count, F, Q
+from django.db.models.functions import Lower
 from django.utils import timezone
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -18,6 +23,9 @@ from .serializers import (
     QuestionSerializer,
     ReportFilterSerializer,
     SchoolClassSerializer,
+    StudentAdminSerializer,
+    StudentPasswordResetSerializer,
+    StudentStatusSerializer,
     SubjectSerializer,
     TopicSerializer,
 )
@@ -43,8 +51,28 @@ class SubjectTopicsView(APIView):
         return Response(TopicSerializer(topics, many=True).data)
 
 
-class TopicQuestionsView(APIView):
+class TopicDetailView(APIView):
     permission_classes = [HasActiveSchoolAccess]
+
+    def get(self, request, topic_id):
+        try:
+            topic = Topic.objects.annotate(
+                question_count=Count(
+                    "questions",
+                    filter=Q(questions__is_published=True, questions__kind=Question.Kind.MCQ),
+                )
+            ).get(
+                id=topic_id,
+                is_published=True,
+                subject__is_published=True,
+            )
+        except Topic.DoesNotExist:
+            return Response({"detail": "Topic not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(TopicSerializer(topic).data)
+
+
+class TopicQuestionsView(APIView):
+    permission_classes = [HasActiveSchoolAccess, IsStudent]
 
     def get(self, request, topic_id):
         questions = Question.objects.filter(
@@ -126,11 +154,17 @@ class BulkStudentCreateView(APIView):
     def post(self, request):
         serializer = BulkStudentCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        students = serializer.validated_data["students"]
+        return self.create_students(request, serializer.validated_data["students"])
+
+    @staticmethod
+    def create_students(request, students):
+        school = request.user.school
         usernames = [student["username"] for student in students]
-        if User.objects.filter(username__in=usernames).exists():
+        if User.objects.filter(school=school).annotate(
+            normalized_username=Lower("username")
+        ).filter(normalized_username__in=[username.lower() for username in usernames]).exists():
             return Response(
-                {"detail": "One or more usernames are already in use."},
+                {"detail": "One or more usernames are already in use at your school."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         class_ids = {
@@ -138,9 +172,7 @@ class BulkStudentCreateView(APIView):
             for student in students
             if student.get("class_id") is not None
         }
-        classes = SchoolClass.objects.filter(
-            school=request.user.school, id__in=class_ids
-        ).in_bulk()
+        classes = SchoolClass.objects.filter(school=school, id__in=class_ids).in_bulk()
         if class_ids != set(classes):
             return Response(
                 {"detail": "Choose a class that belongs to your school."},
@@ -150,7 +182,7 @@ class BulkStudentCreateView(APIView):
         try:
             with transaction.atomic():
                 active_subscription = (
-                    request.user.school.subscriptions.select_for_update()
+                    school.subscriptions.select_for_update()
                     .filter(
                         status=TermSubscription.Status.ACTIVE,
                         starts_at__lte=timezone.now().date(),
@@ -164,8 +196,8 @@ class BulkStudentCreateView(APIView):
                         {"detail": "No current school subscription is available."},
                         status=status.HTTP_403_FORBIDDEN,
                     )
-                current_student_count = request.user.school.users.filter(
-                    role=User.Role.STUDENT
+                current_student_count = school.users.filter(
+                    role=User.Role.STUDENT, is_active=True
                 ).count()
                 if current_student_count + len(students) > active_subscription.seat_limit:
                     return Response(
@@ -178,7 +210,7 @@ class BulkStudentCreateView(APIView):
                         first_name=entry.get("first_name", ""),
                         last_name=entry.get("last_name", ""),
                         role=User.Role.STUDENT,
-                        school=request.user.school,
+                        school=school,
                         school_class=classes.get(entry.get("class_id")),
                     )
                     for entry in students
@@ -188,13 +220,297 @@ class BulkStudentCreateView(APIView):
                 User.objects.bulk_create(created)
         except IntegrityError:
             return Response(
-                {"detail": "One or more usernames are already in use."},
+                {"detail": "One or more usernames are already in use at your school."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response(
             {"created": len(created), "usernames": usernames},
             status=status.HTTP_201_CREATED,
         )
+
+
+class BulkStudentImportView(APIView):
+    permission_classes = [HasActiveSchoolAccess, IsSchoolAdmin]
+    parser_classes = [MultiPartParser, FormParser]
+    max_file_size = 2 * 1024 * 1024
+
+    def post(self, request):
+        uploaded = request.FILES.get("file")
+        if uploaded is None:
+            return Response(
+                {"detail": "Upload a CSV file in the 'file' field."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if uploaded.size > self.max_file_size:
+            return Response(
+                {"detail": "CSV file must be 2 MB or smaller."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            text = uploaded.read().decode("utf-8-sig")
+        except UnicodeDecodeError:
+            return Response(
+                {"detail": "CSV file must use UTF-8 encoding."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            reader = csv.DictReader(io.StringIO(text, newline=""))
+            required_headers = {"username", "password"}
+            headers = {header.strip().lower() for header in (reader.fieldnames or [])}
+            if not required_headers.issubset(headers):
+                return Response(
+                    {"detail": "CSV must include username and password columns."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            rows = []
+            for row_number, raw_row in enumerate(reader, start=2):
+                if len(rows) >= 200:
+                    return Response(
+                        {"detail": "A CSV import may contain at most 200 students."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if None in raw_row or any(
+                    isinstance(value, list) for value in raw_row.values()
+                ):
+                    return Response(
+                        {"detail": f"Row {row_number} has more columns than the header."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                row = {
+                    (key or "").strip().lower(): (value or "")
+                    for key, value in raw_row.items()
+                }
+                class_id = None
+                class_name = row.get("class_name", "").strip()
+                if class_name:
+                    school_class = SchoolClass.objects.filter(
+                        school=request.user.school, name__iexact=class_name
+                    ).first()
+                    if school_class is None:
+                        return Response(
+                            {"detail": f"Class '{class_name}' on row {row_number} does not exist at your school."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    class_id = school_class.id
+                rows.append(
+                    {
+                        "username": row.get("username", ""),
+                        "password": row.get("password", ""),
+                        "first_name": row.get("first_name", ""),
+                        "last_name": row.get("last_name", ""),
+                        "class_id": class_id,
+                    }
+                )
+        except (csv.Error, AttributeError):
+            return Response(
+                {"detail": "Could not parse the CSV file."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = BulkStudentCreateSerializer(data={"students": rows})
+        serializer.is_valid(raise_exception=True)
+        return BulkStudentCreateView.create_students(
+            request, serializer.validated_data["students"]
+        )
+
+
+class SchoolStudentListView(APIView):
+    permission_classes = [HasActiveSchoolAccess, IsSchoolAdmin]
+
+    def get(self, request):
+        students = User.objects.filter(
+            school=request.user.school, role=User.Role.STUDENT
+        ).select_related("school_class").annotate(
+            total_attempts=Count("attempts", filter=Q(attempts__school=request.user.school)),
+            average_score=Avg("attempts__score", filter=Q(attempts__school=request.user.school)),
+        ).order_by("username")
+        return Response(StudentAdminSerializer(students, many=True).data)
+
+
+class SchoolStudentPerformanceView(APIView):
+    permission_classes = [HasActiveSchoolAccess, IsSchoolAdmin]
+
+    def get(self, request, student_id):
+        student = User.objects.filter(
+            id=student_id,
+            school=request.user.school,
+            role=User.Role.STUDENT,
+        ).select_related("school_class").first()
+        if student is None:
+            return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        attempts = Attempt.objects.filter(
+            school=request.user.school,
+            student=student,
+        )
+        summary = attempts.aggregate(
+            total_attempts=Count("id"),
+            correct_attempts=Count("id", filter=Q(is_correct=True)),
+            scored_attempts=Count("score"),
+            average_score=Avg("score"),
+        )
+        subject_performance = {}
+        topic_rows = (
+            attempts.values(
+                "question__topic__subject_id",
+                "question__topic__subject__name",
+                "question__topic_id",
+                "question__topic__title",
+            )
+            .annotate(
+                attempts=Count("id"),
+                correct_attempts=Count("id", filter=Q(is_correct=True)),
+                scored_attempts=Count("score"),
+                average_score=Avg("score"),
+            )
+            .order_by(
+                "question__topic__subject__position",
+                "question__topic__subject__name",
+                "question__topic__position",
+                "question__topic__title",
+            )
+        )
+        for row in topic_rows:
+            subject_id = row["question__topic__subject_id"]
+            subject = subject_performance.setdefault(
+                subject_id,
+                {
+                    "subject_id": subject_id,
+                    "subject": row["question__topic__subject__name"],
+                    "attempts": 0,
+                    "correct_attempts": 0,
+                    "scored_attempts": 0,
+                    "average_score": None,
+                    "topics": [],
+                },
+            )
+            topic = {
+                "topic_id": row["question__topic_id"],
+                "topic": row["question__topic__title"],
+                "attempts": row["attempts"],
+                "correct_attempts": row["correct_attempts"],
+                "scored_attempts": row["scored_attempts"],
+                "average_score": (
+                    round(row["average_score"], 1)
+                    if row["average_score"] is not None
+                    else None
+                ),
+            }
+            subject["topics"].append(topic)
+            subject["attempts"] += row["attempts"]
+            subject["correct_attempts"] += row["correct_attempts"]
+            subject["scored_attempts"] += row["scored_attempts"]
+
+        subject_rows = (
+            attempts.values(
+                "question__topic__subject_id",
+                "question__topic__subject__name",
+            )
+            .annotate(average_score=Avg("score"))
+        )
+        subject_averages = {
+            row["question__topic__subject_id"]: row["average_score"]
+            for row in subject_rows
+        }
+        for subject_id, subject in subject_performance.items():
+            average_score = subject_averages[subject_id]
+            subject["average_score"] = (
+                round(average_score, 1) if average_score is not None else None
+            )
+
+        return Response(
+            {
+                "student": {
+                    "id": student.id,
+                    "username": student.username,
+                    "first_name": student.first_name,
+                    "last_name": student.last_name,
+                    "class_name": (
+                        student.school_class.name if student.school_class else None
+                    ),
+                    "is_active": student.is_active,
+                },
+                "summary": {
+                    "total_attempts": summary["total_attempts"] or 0,
+                    "correct_attempts": summary["correct_attempts"] or 0,
+                    "scored_attempts": summary["scored_attempts"] or 0,
+                    "average_score": (
+                        round(summary["average_score"], 1)
+                        if summary["average_score"] is not None
+                        else None
+                    ),
+                },
+                "subjects": list(subject_performance.values()),
+            }
+        )
+
+
+class SchoolStudentDetailView(APIView):
+    permission_classes = [HasActiveSchoolAccess, IsSchoolAdmin]
+
+    def get_student(self, request, student_id):
+        return User.objects.filter(
+            id=student_id,
+            school=request.user.school,
+            role=User.Role.STUDENT,
+        ).first()
+
+    def patch(self, request, student_id):
+        student = self.get_student(request, student_id)
+        if student is None:
+            return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = StudentStatusSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        is_active = serializer.validated_data["is_active"]
+        if is_active and not student.is_active:
+            with transaction.atomic():
+                subscription = (
+                    request.user.school.subscriptions.select_for_update()
+                    .filter(
+                        status=TermSubscription.Status.ACTIVE,
+                        starts_at__lte=timezone.now().date(),
+                        ends_at__gte=timezone.now().date(),
+                    )
+                    .order_by("-seat_limit")
+                    .first()
+                )
+                if subscription is None:
+                    return Response(
+                        {"detail": "No current school subscription is available."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+                active_count = request.user.school.users.filter(
+                    role=User.Role.STUDENT,
+                    is_active=True,
+                ).count()
+                if active_count >= subscription.seat_limit:
+                    return Response(
+                        {"detail": f"This term has {subscription.seat_limit} student seats."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                student.is_active = True
+                student.save(update_fields=["is_active"])
+        else:
+            student.is_active = is_active
+            student.save(update_fields=["is_active"])
+        return Response(StudentAdminSerializer(student).data)
+
+    def post(self, request, student_id):
+        if request.resolver_match.url_name != "school-student-reset-password":
+            return Response(
+                {"detail": "Method not allowed."},
+                status=status.HTTP_405_METHOD_NOT_ALLOWED,
+            )
+        student = self.get_student(request, student_id)
+        if student is None:
+            return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = StudentPasswordResetSerializer(
+            data=request.data, context={"user": student}
+        )
+        serializer.is_valid(raise_exception=True)
+        student.set_password(serializer.validated_data["password"])
+        student.save(update_fields=["password"])
+        return Response({"detail": "Student password has been reset."})
 
 
 class SchoolClassesView(APIView):
@@ -263,8 +579,18 @@ class SchoolReportsView(APIView):
             .annotate(
                 total_attempts=Count("attempts", filter=student_attempt_filter),
                 average_score=Avg("attempts__score", filter=student_attempt_filter),
+                class_name=F("school_class__name"),
             )
-            .values("id", "username", "first_name", "last_name", "total_attempts", "average_score")
+            .values(
+                "id",
+                "username",
+                "first_name",
+                "last_name",
+                "is_active",
+                "class_name",
+                "total_attempts",
+                "average_score",
+            )
             .order_by("username")
         )
         current_date = timezone.now().date()
@@ -280,7 +606,10 @@ class SchoolReportsView(APIView):
                 "school": request.user.school.name,
                 "student_count": student_query.count(),
                 "total_student_count": request.user.school.users.filter(
-                    role=User.Role.STUDENT
+                    role=User.Role.STUDENT, is_active=True
+                ).count(),
+                "inactive_student_count": request.user.school.users.filter(
+                    role=User.Role.STUDENT, is_active=False
                 ).count(),
                 "classes": SchoolClassSerializer(school_classes, many=True).data,
                 "available_subjects": list(

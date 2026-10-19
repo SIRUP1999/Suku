@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   ArrowRight,
@@ -15,79 +16,40 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { api, getToken, setToken, setTokens, type Attempt, type NewStudent, type Progress, type Question, type Report, type SchoolClass, type Subject, type Topic, type User } from "./api";
-
-type Screen =
-  | { name: "home" }
-  | { name: "topics"; subject: Subject }
-  | { name: "lesson"; subject: Subject; topic: Topic }
-  | { name: "quiz"; topic: Topic; questions: Question[] }
-  | { name: "progress" }
-  | { name: "reports" };
+import { api, getToken, setToken, setTokens, type Attempt, type NewStudent, type Progress, type Question, type Report, type SchoolClass, type SchoolStudent, type StudentPerformance, type Subject, type Topic, type User } from "./api";
 
 function App() {
+  const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(null);
-  const [screen, setScreen] = useState<Screen>({ name: "home" });
   const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [mobileMenu, setMobileMenu] = useState(false);
 
   const loadSubjects = useCallback(async () => {
     const rows = await api.subjects();
     setSubjects(rows);
   }, []);
 
-  const finishLogin = useCallback(async (loggedInUser: User) => {
+  const finishLogin = useCallback(async (loggedInUser: User, redirect = true) => {
     setUser(loggedInUser);
-    setScreen({ name: "home" });
     setError("");
     if (loggedInUser.role === "student" || loggedInUser.role === "school_admin") {
       await loadSubjects();
     }
-  }, [loadSubjects]);
+    if (redirect) navigate("/");
+  }, [loadSubjects, navigate]);
 
   useEffect(() => {
     if (!getToken()) return;
     api.me()
-      .then(finishLogin)
+      .then((currentUser) => finishLogin(currentUser, false))
       .catch(() => setToken(null));
   }, [finishLogin]);
 
   async function signOut() {
     setToken(null);
     setUser(null);
-    setScreen({ name: "home" });
     setSubjects([]);
-  }
-
-  async function openTopics(subject: Subject) {
-    setBusy(true);
-    setError("");
-    try {
-      setScreen({ name: "topics", subject });
-    } catch (reason) {
-      setError(errorText(reason));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function openQuiz(topic: Topic) {
-    setBusy(true);
-    setError("");
-    try {
-      const questions = await api.questions(topic.id);
-      if (!questions.length) {
-        setError("There are no published practice questions for this topic yet.");
-        return;
-      }
-      setScreen({ name: "quiz", topic, questions });
-    } catch (reason) {
-      setError(errorText(reason));
-    } finally {
-      setBusy(false);
-    }
+    navigate("/");
   }
 
   if (!user) {
@@ -96,27 +58,58 @@ function App() {
 
   const isAdmin = user.role === "school_admin";
   return (
+    <AppLayout
+      user={user}
+      subjects={subjects}
+      error={error}
+      setError={setError}
+      onSignOut={signOut}
+      isAdmin={isAdmin}
+    />
+  );
+}
+
+function AppLayout({
+  user,
+  subjects,
+  error,
+  setError,
+  onSignOut,
+  isAdmin,
+}: {
+  user: User;
+  subjects: Subject[];
+  error: string;
+  setError: (value: string) => void;
+  onSignOut: () => void;
+  isAdmin: boolean;
+}) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [mobileMenu, setMobileMenu] = useState(false);
+  const activeLearning = location.pathname === "/" || location.pathname.startsWith("/subjects/") || location.pathname.startsWith("/topics/");
+  return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileMenu ? "sidebar-open" : ""}`}>
         <div className="brand"><span className="brand-mark"><GraduationCap size={22} /></span><span>Suku<span className="brand-dot">.</span></span></div>
         <div className="school-tag">{user.school_name ?? "Suku learning"}</div>
         <nav className="nav-list">
-          <button className={screen.name === "home" || screen.name === "topics" || screen.name === "lesson" || screen.name === "quiz" ? "nav-link active" : "nav-link"} onClick={() => { setScreen({ name: "home" }); setMobileMenu(false); }}>
+          <button className={activeLearning ? "nav-link active" : "nav-link"} onClick={() => { navigate("/"); setMobileMenu(false); }}>
             <BookOpen size={18} /> {isAdmin ? "Learning library" : "My learning"}
           </button>
           {isAdmin ? (
-            <button className={screen.name === "reports" ? "nav-link active" : "nav-link"} onClick={() => { setScreen({ name: "reports" }); setMobileMenu(false); }}>
+            <button className={location.pathname === "/reports" ? "nav-link active" : "nav-link"} onClick={() => { navigate("/reports"); setMobileMenu(false); }}>
               <Users size={18} /> School reports
             </button>
           ) : (
-            <button className={screen.name === "progress" ? "nav-link active" : "nav-link"} onClick={() => { setScreen({ name: "progress" }); setMobileMenu(false); }}>
+            <button className={location.pathname === "/progress" ? "nav-link active" : "nav-link"} onClick={() => { navigate("/progress"); setMobileMenu(false); }}>
               <Target size={18} /> My progress
             </button>
           )}
         </nav>
         <div className="sidebar-bottom">
           <div className="profile-mini"><span className="avatar">{(user.first_name || user.username).slice(0, 1).toUpperCase()}</span><span><strong>{user.first_name || user.username}</strong><small>{isAdmin ? "School admin" : "Student"}</small></span></div>
-          <button className="signout" onClick={signOut}><LogOut size={17} /> Sign out</button>
+          <button className="signout" onClick={onSignOut}><LogOut size={17} /> Sign out</button>
         </div>
       </aside>
       {mobileMenu && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setMobileMenu(false)} />}
@@ -128,14 +121,15 @@ function App() {
         </header>
         <section className="page-content">
           {error && <div className="alert" role="alert"><CircleHelp size={17} />{error}<button aria-label="Dismiss" onClick={() => setError("")}><X size={16} /></button></div>}
-          {busy && <div className="loading-line">Loading…</div>}
-          {screen.name === "home" && <Home user={user} subjects={subjects} onSubject={openTopics} onAdminReports={() => setScreen({ name: "reports" })} />}
-          {screen.name === "topics" && <Topics subject={screen.subject} onBack={() => setScreen({ name: "home" })} onOpen={(topic) => setScreen({ name: "lesson", subject: screen.subject, topic })} />}
-          {screen.name === "lesson" && <Lesson topic={screen.topic} onBack={() => setScreen({ name: "topics", subject: screen.subject })} onPractice={openQuiz} />}
-          {screen.name === "quiz" && <Quiz key={screen.topic.id} topic={screen.topic} questions={screen.questions} onBack={() => setScreen({ name: "home" })} onError={setError} />}
-          {screen.name === "progress" && <ProgressPage />}
-          {screen.name === "reports" && <ReportsPage onError={setError} />}
-          {isAdmin && screen.name === "home" && <StudentCreator onError={setError} />}
+        <Routes>
+          <Route path="/" element={<Home user={user} subjects={subjects} onSubject={(subject) => navigate(`/subjects/${subject.id}`)} onAdminReports={() => navigate("/reports")} />} />
+          <Route path="/subjects/:subjectId" element={<TopicsRoute subjects={subjects} />} />
+          <Route path="/topics/:topicId" element={<LessonRoute user={user} />} />
+          <Route path="/topics/:topicId/practice" element={isAdmin ? <Navigate to="/" replace /> : <PracticeRoute onError={setError} />} />
+          <Route path="/progress" element={isAdmin ? <Navigate to="/" replace /> : <ProgressPage />} />
+          <Route path="/reports" element={isAdmin ? <ReportsPage onError={setError} /> : <Navigate to="/" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
         </section>
       </main>
     </div>
@@ -143,6 +137,7 @@ function App() {
 }
 
 function Login({ onLogin, onError, error }: { onLogin: (user: User) => Promise<void>; onError: (value: string) => void; error: string }) {
+  const [schoolCode, setSchoolCode] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [working, setWorking] = useState(false);
@@ -152,7 +147,7 @@ function Login({ onLogin, onError, error }: { onLogin: (user: User) => Promise<v
     setWorking(true);
     onError("");
     try {
-      const tokens = await api.login(username, password);
+      const tokens = await api.login(schoolCode, username, password);
       setTokens(tokens.access, tokens.refresh);
       await onLogin(tokens.user);
     } catch (reason) {
@@ -169,6 +164,7 @@ function Login({ onLogin, onError, error }: { onLogin: (user: User) => Promise<v
         <div className="mobile-brand brand"><span className="brand-mark"><GraduationCap size={22} /></span><span>Suku<span className="brand-dot">.</span></span></div>
         <span className="eyebrow">WELCOME BACK</span><h2>Ready to learn?</h2><p className="form-intro">Sign in with the account your school gave you.</p>
         {error && <div className="alert login-alert" role="alert">{error}</div>}
+        <label htmlFor="school-code">School code</label><input id="school-code" autoComplete="organization" value={schoolCode} onChange={(event) => setSchoolCode(event.target.value)} required placeholder="Ask your school administrator" />
         <label htmlFor="username">Username</label><input id="username" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required placeholder="Your school username" />
         <label htmlFor="password">Password</label><input id="password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required placeholder="Your password" />
         <button className="button button-primary login-submit" disabled={working}>{working ? "Signing in…" : "Sign in"}<ArrowRight size={17} /></button>
@@ -205,8 +201,59 @@ function Topics({ subject, onBack, onOpen }: { subject: Subject; onBack: () => v
   return <><button className="back-link" onClick={onBack}><ArrowLeft size={16} /> All subjects</button><div className="page-title-row"><div><span className="eyebrow">{subject.name.toUpperCase()}</span><h1>Choose a topic</h1><p>Work through a topic at your own pace.</p></div></div>{error && <div className="alert">{error}</div>}{loading ? <div className="loading-line">Loading topics…</div> : topics.length ? <div className="topic-list">{topics.map((topic, index) => <button className="topic-card" key={topic.id} onClick={() => onOpen(topic)}><span className="topic-number">{String(index + 1).padStart(2, "0")}</span><span className="topic-copy"><strong>{topic.title}</strong><small>{topic.summary || "Read the lesson, then practise what you learned."}</small></span><span className="topic-question-count">{topic.question_count} questions</span><ChevronRight size={19} /></button>)}</div> : <div className="empty-state"><BookOpen size={27} /><h3>No topics published just yet</h3><p>Your school will add learning content here soon.</p></div>}</>;
 }
 
-function Lesson({ topic, onBack, onPractice }: { topic: Topic; onBack: () => void; onPractice: (topic: Topic) => void }) {
-  return <><button className="back-link" onClick={onBack}><ArrowLeft size={16} /> Back to topics</button><article className="lesson-card"><span className="eyebrow">TAKE YOUR TIME · LEARN AT YOUR PACE</span><h1>{topic.title}</h1>{topic.summary && <p className="lesson-summary">{topic.summary}</p>}<div className="lesson-content">{topic.content || "This lesson is being prepared. You can still practise any published questions below."}</div><div className="lesson-footer"><span><BookOpen size={15} /> {topic.question_count} practice questions</span><button className="button button-primary" onClick={() => onPractice(topic)}>Start practice <ArrowRight size={17} /></button></div></article></>;
+function TopicsRoute({ subjects }: { subjects: Subject[] }) {
+  const { subjectId } = useParams();
+  const navigate = useNavigate();
+  const subject = subjects.find((item) => item.id === Number(subjectId));
+  if (!subject) return subjects.length ? <div className="empty-state"><BookOpen size={27} /><h3>Subject not found</h3><button className="button button-outline" onClick={() => navigate("/")}>All subjects</button></div> : <div className="loading-line">Loading subject…</div>;
+  return <Topics subject={subject} onBack={() => navigate("/")} onOpen={(topic) => navigate(`/topics/${topic.id}`)} />;
+}
+
+function LessonRoute({ user }: { user: User }) {
+  const { topicId } = useParams();
+  const navigate = useNavigate();
+  const [topic, setTopic] = useState<Topic | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    setTopic(null);
+    api.topic(Number(topicId)).then(setTopic).catch((reason) => setError(errorText(reason)));
+  }, [topicId]);
+  if (error) return <div className="alert" role="alert">{error}</div>;
+  if (!topic) return <div className="loading-line">Loading lesson…</div>;
+  return (
+    <Lesson
+      topic={topic}
+      canPractice={user.role === "student"}
+      onBack={() => navigate(`/subjects/${topic.subject}`)}
+      onPractice={() => navigate(`/topics/${topic.id}/practice`)}
+    />
+  );
+}
+
+function PracticeRoute({ onError }: { onError: (message: string) => void }) {
+  const { topicId } = useParams();
+  const navigate = useNavigate();
+  const [topic, setTopic] = useState<Topic | null>(null);
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    setTopic(null);
+    setQuestions([]);
+    Promise.all([api.topic(Number(topicId)), api.questions(Number(topicId))])
+      .then(([loadedTopic, loadedQuestions]) => {
+        setTopic(loadedTopic);
+        setQuestions(loadedQuestions);
+      })
+      .catch((reason) => setError(errorText(reason)));
+  }, [topicId]);
+  if (error) return <div className="alert" role="alert">{error}</div>;
+  if (!topic) return <div className="loading-line">Loading practice…</div>;
+  if (!questions.length) return <div className="empty-state"><BookOpen size={27} /><h3>No practice questions available</h3><p>Published questions for this topic will appear here.</p><button className="button button-outline" onClick={() => navigate(`/topics/${topic.id}`)}>Back to lesson</button></div>;
+  return <Quiz key={topic.id} topic={topic} questions={questions} onBack={() => navigate(`/topics/${topic.id}`)} onError={onError} />;
+}
+
+function Lesson({ topic, canPractice, onBack, onPractice }: { topic: Topic; canPractice: boolean; onBack: () => void; onPractice: () => void }) {
+  return <><button className="back-link" onClick={onBack}><ArrowLeft size={16} /> Back to topics</button><article className="lesson-card"><span className="eyebrow">TAKE YOUR TIME · LEARN AT YOUR PACE</span><h1>{topic.title}</h1>{topic.summary && <p className="lesson-summary">{topic.summary}</p>}<div className="lesson-content">{topic.content || "This lesson is being prepared. You can still practise any published questions below."}</div>{canPractice && <div className="lesson-footer"><span><BookOpen size={15} /> {topic.question_count} practice questions</span><button className="button button-primary" onClick={onPractice}>Start practice <ArrowRight size={17} /></button></div>}</article></>;
 }
 
 function Quiz({ topic, questions, onBack, onError }: { topic: Topic; questions: Question[]; onBack: () => void; onError: (message: string) => void }) {
@@ -257,6 +304,7 @@ function ProgressPage() {
 function ReportsPage({ onError }: { onError: (message: string) => void }) {
   const [data, setData] = useState<Report | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [studentRefresh, setStudentRefresh] = useState(0);
   const [classId, setClassId] = useState("");
   const [subjectId, setSubjectId] = useState("");
   const [className, setClassName] = useState("");
@@ -267,7 +315,7 @@ function ReportsPage({ onError }: { onError: (message: string) => void }) {
       ...(classId ? { class_id: Number(classId) } : {}),
       ...(subjectId ? { subject_id: Number(subjectId) } : {}),
     }).then(setData).catch((reason) => onError(errorText(reason)));
-  }, [onError, classId, subjectId, refresh]);
+  }, [onError, classId, subjectId, refresh, studentRefresh]);
   async function createClass(event: React.FormEvent) {
     event.preventDefault();
     setWorking(true);
@@ -286,7 +334,7 @@ function ReportsPage({ onError }: { onError: (message: string) => void }) {
   const accuracy = data.summary.total_attempts ? Math.round((data.summary.correct_attempts / data.summary.total_attempts) * 100) : 0;
   return <>
     <div className="page-title-row report-title"><div><span className="eyebrow">SCHOOL OVERVIEW</span><h1>Learning at a glance</h1><p>Progress across {data.school}.</p></div><button className="button button-primary" onClick={() => setShowForm(!showForm)}>{showForm ? <X size={17} /> : <Plus size={17} />}{showForm ? "Close" : "Add students"}</button></div>
-    {showForm && <StudentCreator onError={onError} />}
+    {showForm && <StudentCreator onError={onError} onCreated={() => setStudentRefresh((value) => value + 1)} />}
     <div className="report-filters">
       <label>Class<select value={classId} onChange={(event) => setClassId(event.target.value)}><option value="">All classes</option>{data.classes.map((schoolClass) => <option key={schoolClass.id} value={schoolClass.id}>{schoolClass.name}</option>)}</select></label>
       <label>Subject<select value={subjectId} onChange={(event) => setSubjectId(event.target.value)}><option value="">All subjects</option>{data.available_subjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}</select></label>
@@ -295,11 +343,11 @@ function ReportsPage({ onError }: { onError: (message: string) => void }) {
     <div className="stat-grid"><Stat icon={<Users size={19} />} label="Students" value={String(data.student_count)} tone="green" /><Stat icon={<BookOpen size={19} />} label="Questions answered" value={String(data.summary.total_attempts)} tone="yellow" /><Stat icon={<Target size={19} />} label="Average accuracy" value={`${accuracy}%`} tone="peach" /></div>
     <div className="subscription-card"><div><span className="eyebrow">SCHOOL SUBSCRIPTION</span><strong>{data.subscription?.term_name ?? "No term on record"}</strong><small>{data.subscription ? `${data.subscription.starts_at} to ${data.subscription.ends_at}` : "Contact your platform administrator to set up a term."}</small></div><span className={`subscription-status ${data.subscription?.is_current ? "subscription-current" : ""}`}>{data.subscription?.is_current ? "Active" : data.subscription?.status ?? "Not set"}</span><span className="subscription-seats">{data.subscription ? `${data.total_student_count} / ${data.subscription.seat_limit} seats` : "—"}</span></div>
     <div className="panel"><div className="panel-heading"><div><span className="eyebrow">BY SUBJECT</span><h2>Practice performance</h2></div></div>{data.subjects.length ? <div className="subject-report-list">{data.subjects.map((subject) => { const ratio = subject.attempts ? Math.round((subject.correct / subject.attempts) * 100) : 0; return <div className="subject-report" key={subject.question__topic__subject__id}><div className="subject-report-head"><strong>{subject.question__topic__subject__name}</strong><span>{subject.attempts} attempts · {ratio}% correct</span></div><div className="progress-track"><div style={{ width: `${ratio}%` }} /></div></div>; })}</div> : <div className="empty-inline">Subject results will appear as students practise.</div>}</div>
-    <div className="panel student-panel"><div className="panel-heading"><div><span className="eyebrow">YOUR SCHOOL</span><h2>Student activity</h2></div></div>{data.students.length ? <div className="table-wrap"><table><thead><tr><th>Student</th><th>Username</th><th>Attempts</th><th>Avg. score</th></tr></thead><tbody>{data.students.map((student) => <tr key={student.id}><td>{student.first_name || student.last_name ? `${student.first_name} ${student.last_name}`.trim() : "—"}</td><td>{student.username}</td><td>{student.total_attempts}</td><td>{student.average_score == null ? "—" : `${Math.round(student.average_score)}%`}</td></tr>)}</tbody></table></div> : <div className="empty-inline">Add student accounts to get started.</div>}</div>
+    <StudentManager key={studentRefresh} onError={onError} onChanged={() => setStudentRefresh((value) => value + 1)} />
   </>;
 }
 
-function StudentCreator({ onError }: { onError: (message: string) => void }) {
+function StudentCreator({ onError, onCreated }: { onError: (message: string) => void; onCreated: () => void }) {
   const [open, setOpen] = useState(false);
   const [students, setStudents] = useState<NewStudent[]>([{ username: "", password: "", first_name: "", last_name: "", class_id: null }]);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
@@ -317,6 +365,7 @@ function StudentCreator({ onError }: { onError: (message: string) => void }) {
       const result = await api.createStudents(students);
       setNotice(`${result.created} student account${result.created === 1 ? "" : "s"} created. Share usernames and temporary passwords securely with students.`);
       setStudents([{ username: "", password: "", first_name: "", last_name: "", class_id: null }]);
+      onCreated();
     } catch (reason) {
       onError(errorText(reason));
     } finally {
@@ -326,7 +375,113 @@ function StudentCreator({ onError }: { onError: (message: string) => void }) {
   function updateStudent<K extends keyof NewStudent>(index: number, field: K, value: NewStudent[K]) {
     setStudents((current) => current.map((student, row) => row === index ? { ...student, [field]: value } : student));
   }
-  return <div className="panel creator-panel"><div className="panel-heading"><div><span className="eyebrow">STUDENT ACCOUNTS</span><h2>Add students</h2></div><button type="button" className="button button-outline" onClick={() => setOpen(!open)}>{open ? "Close" : <><Plus size={16} /> Create accounts</>}</button></div>{notice && <div className="success-notice"><Check size={16} />{notice}</div>}{open && <form className="student-form" onSubmit={submit}>{students.map((student, index) => <div className="student-form-row" key={index}><span className="student-row-label">Student {index + 1}</span><label>Username<input value={student.username} onChange={(event) => updateStudent(index, "username", event.target.value)} required /></label><label>Temporary password<input type="password" minLength={8} value={student.password} onChange={(event) => updateStudent(index, "password", event.target.value)} required /></label><label>First name<input value={student.first_name} onChange={(event) => updateStudent(index, "first_name", event.target.value)} /></label><label>Last name<input value={student.last_name} onChange={(event) => updateStudent(index, "last_name", event.target.value)} /></label><label>Class<select value={student.class_id ?? ""} onChange={(event) => updateStudent(index, "class_id", event.target.value ? Number(event.target.value) : null)}><option value="">No class</option>{classes.map((schoolClass) => <option value={schoolClass.id} key={schoolClass.id}>{schoolClass.name}</option>)}</select></label>{students.length > 1 && <button type="button" className="remove-student" onClick={() => setStudents((current) => current.filter((_, row) => row !== index))}>Remove</button>}</div>)}<div className="student-form-actions"><button type="button" className="button button-outline" disabled={students.length >= 200} onClick={() => setStudents((current) => [...current, { username: "", password: "", first_name: "", last_name: "", class_id: null }])}><Plus size={15} /> Add another</button><button className="button button-primary" disabled={working}>{working ? "Creating…" : `Create ${students.length} account${students.length === 1 ? "" : "s"}`}</button></div></form>}</div>;
+  async function importCsv(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setWorking(true);
+    setNotice("");
+    onError("");
+    try {
+      const result = await api.importStudents(file);
+      setNotice(`${result.created} student account${result.created === 1 ? "" : "s"} imported. Securely delete the CSV containing temporary passwords.`);
+      onCreated();
+    } catch (reason) {
+      onError(errorText(reason));
+    } finally {
+      setWorking(false);
+    }
+  }
+  return <div className="panel creator-panel"><div className="panel-heading"><div><span className="eyebrow">STUDENT ACCOUNTS</span><h2>Add students</h2></div><div className="creator-actions"><label className={`button button-outline ${working ? "button-disabled" : ""}`}>Import CSV<input className="visually-hidden" type="file" accept=".csv,text/csv" disabled={working} onChange={importCsv} /></label><button type="button" className="button button-outline" onClick={() => setOpen(!open)}>{open ? "Close" : <><Plus size={16} /> Create accounts</>}</button></div></div><p className="csv-help">CSV columns: username, password, first_name, last_name, class_name. Create classes first; delete files with temporary passwords after importing.</p>{notice && <div className="success-notice"><Check size={16} />{notice}</div>}{open && <form className="student-form" onSubmit={submit}>{students.map((student, index) => <div className="student-form-row" key={index}><span className="student-row-label">Student {index + 1}</span><label>Username<input value={student.username} onChange={(event) => updateStudent(index, "username", event.target.value)} required /></label><label>Temporary password<input type="password" minLength={8} value={student.password} onChange={(event) => updateStudent(index, "password", event.target.value)} required /></label><label>First name<input value={student.first_name} onChange={(event) => updateStudent(index, "first_name", event.target.value)} /></label><label>Last name<input value={student.last_name} onChange={(event) => updateStudent(index, "last_name", event.target.value)} /></label><label>Class<select value={student.class_id ?? ""} onChange={(event) => updateStudent(index, "class_id", event.target.value ? Number(event.target.value) : null)}><option value="">No class</option>{classes.map((schoolClass) => <option value={schoolClass.id} key={schoolClass.id}>{schoolClass.name}</option>)}</select></label>{students.length > 1 && <button type="button" className="remove-student" onClick={() => setStudents((current) => current.filter((_, row) => row !== index))}>Remove</button>}</div>)}<div className="student-form-actions"><button type="button" className="button button-outline" disabled={students.length >= 200} onClick={() => setStudents((current) => [...current, { username: "", password: "", first_name: "", last_name: "", class_id: null }])}><Plus size={15} /> Add another</button><button className="button button-primary" disabled={working}>{working ? "Creating…" : `Create ${students.length} account${students.length === 1 ? "" : "s"}`}</button></div></form>}</div>;
+}
+
+function StudentManager({ onError, onChanged }: { onError: (message: string) => void; onChanged: () => void }) {
+  const [students, setStudents] = useState<SchoolStudent[] | null>(null);
+  const [performanceStudentId, setPerformanceStudentId] = useState<number | null>(null);
+  const [performance, setPerformance] = useState<StudentPerformance | null>(null);
+  const [performanceLoading, setPerformanceLoading] = useState(false);
+  const [resetId, setResetId] = useState<number | null>(null);
+  const [password, setPassword] = useState("");
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [notice, setNotice] = useState("");
+  useEffect(() => {
+    api.students().then(setStudents).catch((reason) => onError(errorText(reason)));
+  }, [onError]);
+
+  useEffect(() => {
+    if (performanceStudentId === null) {
+      setPerformance(null);
+      return;
+    }
+    let current = true;
+    setPerformance(null);
+    setPerformanceLoading(true);
+    api.studentPerformance(performanceStudentId)
+      .then((result) => { if (current) setPerformance(result); })
+      .catch((reason) => { if (current) onError(errorText(reason)); })
+      .finally(() => { if (current) setPerformanceLoading(false); });
+    return () => { current = false; };
+  }, [performanceStudentId, onError]);
+
+  async function toggleActive(student: SchoolStudent) {
+    setBusyId(student.id);
+    onError("");
+    try {
+      const updated = await api.updateStudent(student.id, !student.is_active);
+      setStudents((current) => current?.map((row) => row.id === updated.id ? { ...row, ...updated } : row) ?? null);
+      setNotice(updated.is_active ? "Student account activated." : "Student account deactivated; their seat is now available.");
+      onChanged();
+    } catch (reason) {
+      onError(errorText(reason));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function resetPassword(event: React.FormEvent) {
+    event.preventDefault();
+    if (resetId === null) return;
+    setBusyId(resetId);
+    onError("");
+    try {
+      await api.resetStudentPassword(resetId, password);
+      setNotice("Student password reset. Share the new temporary password securely.");
+      setPassword("");
+      setResetId(null);
+    } catch (reason) {
+      onError(errorText(reason));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return <div className="panel student-panel"><div className="panel-heading"><div><span className="eyebrow">YOUR SCHOOL</span><h2>Student accounts</h2></div></div>{notice && <div className="success-notice"><Check size={16} />{notice}</div>}{students === null ? <div className="loading-line">Loading student accounts…</div> : students.length ? <div className="table-wrap"><table><thead><tr><th>Student</th><th>Username</th><th>Class</th><th>Status</th><th>Attempts</th><th>Avg. score</th><th>Actions</th></tr></thead><tbody>{students.map((student) => <tr key={student.id}><td>{`${student.first_name} ${student.last_name}`.trim() || "—"}</td><td>{student.username}</td><td>{student.class_name ?? "—"}</td><td><span className={`student-status ${student.is_active ? "student-active" : "student-inactive"}`}>{student.is_active ? "Active" : "Inactive"}</span></td><td>{student.total_attempts}</td><td>{student.average_score == null ? "—" : `${Math.round(student.average_score)}%`}</td><td><div className="student-actions"><button type="button" className="table-action" aria-expanded={performanceStudentId === student.id} onClick={() => setPerformanceStudentId(performanceStudentId === student.id ? null : student.id)}>{performanceStudentId === student.id ? "Hide performance" : "View performance"}</button><button type="button" className="table-action" disabled={busyId === student.id} onClick={() => void toggleActive(student)}>{student.is_active ? "Deactivate" : "Activate"}</button><button type="button" className="table-action" onClick={() => { setResetId(resetId === student.id ? null : student.id); setPassword(""); }}>Reset password</button></div>{resetId === student.id && <form className="reset-password-form" onSubmit={resetPassword}><input type="password" minLength={8} autoComplete="new-password" placeholder="New temporary password" value={password} onChange={(event) => setPassword(event.target.value)} required /><button className="button button-outline" disabled={busyId === student.id}>{busyId === student.id ? "Saving…" : "Save"}</button></form>}</td></tr>)}</tbody></table></div> : <div className="empty-inline">Add student accounts to get started.</div>}{performanceStudentId !== null && <StudentPerformancePanel loading={performanceLoading} performance={performance} />}</div>;
+}
+
+function StudentPerformancePanel({ loading, performance }: { loading: boolean; performance: StudentPerformance | null }) {
+  if (loading) return <div className="loading-line">Loading student performance…</div>;
+  if (!performance) return null;
+  const { student, summary, subjects } = performance;
+  const fullName = `${student.first_name} ${student.last_name}`.trim() || student.username;
+  return <section className="student-performance">
+    <div className="panel-heading"><div><span className="eyebrow">INDIVIDUAL REPORT</span><h2>{fullName}{student.class_name ? ` · ${student.class_name}` : ""}</h2></div></div>
+    <div className="performance-summary">
+      <div><span>Questions attempted</span><strong>{summary.total_attempts}</strong></div>
+      <div><span>Correct answers</span><strong>{summary.correct_attempts}</strong></div>
+      <div><span>Average score</span><strong>{summary.average_score === null ? "—" : `${Math.round(summary.average_score)}%`}</strong></div>
+    </div>
+    {!subjects.length ? <div className="empty-inline">Subject and topic performance will appear after this student answers practice questions.</div> : <div className="performance-subjects">{subjects.map((subject) => <article className="performance-subject" key={subject.subject_id}>
+      <div className="performance-subject-heading"><strong>{subject.subject}</strong><PerformanceScore score={subject.average_score} attempts={subject.attempts} /></div>
+      <div className="performance-topics">{subject.topics.map((topic) => <div className="performance-topic" key={topic.topic_id}><span>{topic.topic}<small>{topic.attempts} {topic.attempts === 1 ? "attempt" : "attempts"}</small></span><PerformanceScore score={topic.average_score} attempts={topic.attempts} /></div>)}</div>
+    </article>)}</div>}
+  </section>;
+}
+
+function PerformanceScore({ score, attempts }: { score: number | null; attempts: number }) {
+  const label = score === null ? "Not scored" : score >= 80 ? "Strength" : score >= 50 ? "Building" : "Needs support";
+  const percent = score === null ? 0 : Math.max(0, Math.min(100, score));
+  const tone = score === null ? "performance-unscored" : score >= 80 ? "performance-strong" : score >= 50 ? "performance-building" : "performance-support";
+  return <div className="performance-score"><div className="performance-score-label"><span className={`performance-badge ${tone}`}>{label}</span><strong>{score === null ? "—" : `${Math.round(score)}%`}</strong></div><div className="progress-track"><div style={{ width: `${percent}%` }} /></div>{score === null && attempts > 0 && <small>Answers recorded; score unavailable</small>}</div>;
 }
 
 function Stat({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: string; tone: string }) {
