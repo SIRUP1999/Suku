@@ -176,8 +176,29 @@ class LearningFlowTests(APITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 400)
+        self.assertIn("could not find that school code", response.data["detail"].lower())
         self.assertFalse(User.objects.filter(username="kojo-new").exists())
 
+        self.school.subscriptions.all().delete()
+        self.school.status = School.Status.ACTIVE
+        self.school.save(update_fields=["status"])
+        response = self.client.post(
+            reverse("register-student"),
+            {
+                "school_code": self.school.slug,
+                "first_name": "Kojo",
+                "last_name": "Asare",
+                "username": "kojo-new",
+                "password": "Long-Student-Pass-846!",
+                "grade": 7,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("no current active subscription", response.data["detail"].lower())
+        self.assertFalse(User.objects.filter(username="kojo-new").exists())
+
+        self.activate_school(seat_limit=1)
         response = self.client.post(
             reverse("register-student"),
             {

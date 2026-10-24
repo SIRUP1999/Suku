@@ -19,9 +19,10 @@ import {
 } from "lucide-react";
 import { api, getToken, setToken, setTokens, type Attempt, type NewStudent, type Progress, type Question, type Report, type SchoolClass, type SchoolStudent, type StudentPerformance, type Subject, type Topic, type User, type WorkCheck } from "./api";
 
+const DJANGO_ADMIN_URL = `${(import.meta.env.VITE_API_URL ?? "http://localhost:8000/api").replace(/\/api\/?$/, "")}/admin/`;
+
 function App() {
   const navigate = useNavigate();
-  const location = useLocation();
   const [user, setUser] = useState<User | null>(null);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [error, setError] = useState("");
@@ -47,10 +48,6 @@ function App() {
       .catch(() => setToken(null));
   }, [finishLogin]);
 
-  if (location.pathname === "/admin-setup") {
-    return <PlatformAdminSetup />;
-  }
-
   async function signOut() {
     setToken(null);
     setUser(null);
@@ -64,6 +61,7 @@ function App() {
 
   const isAdmin = user.role === "school_admin";
   const isTeacher = user.role === "teacher";
+  const isPlatformAdmin = isAdmin && !user.school_code;
   return (
     <AppLayout
       user={user}
@@ -73,81 +71,8 @@ function App() {
       onSignOut={signOut}
       isAdmin={isAdmin}
       isTeacher={isTeacher}
+      isPlatformAdmin={isPlatformAdmin}
     />
-  );
-}
-
-function PlatformAdminSetup() {
-  const [token] = useState(() => window.location.hash.slice(1));
-  const [password, setPassword] = useState("");
-  const [confirmation, setConfirmation] = useState("");
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState("");
-  const [complete, setComplete] = useState(false);
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    setError("");
-    if (!token) {
-      setError("This setup link is missing its one-time authorization. Please request a new link.");
-      return;
-    }
-    if (password !== confirmation) {
-      setError("The passwords do not match.");
-      return;
-    }
-    setWorking(true);
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL ?? "http://localhost:8000/api"}/platform-admin/setup/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ password }),
-      });
-      const result = await response.json() as { detail?: string | string[] };
-      if (!response.ok) {
-        setError(Array.isArray(result.detail) ? result.detail.join(" ") : result.detail ?? "Unable to create the administrator account.");
-        return;
-      }
-      window.history.replaceState(null, "", window.location.pathname);
-      setPassword("");
-      setConfirmation("");
-      setComplete(true);
-    } catch {
-      setError("Could not reach Suku. Check your connection and try again.");
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  return (
-    <div className="admin-setup-page">
-      <form className="admin-setup-card" onSubmit={submit}>
-        <div className="brand"><span className="brand-mark"><GraduationCap size={22} /></span><span>Suku<span className="brand-dot">.</span></span></div>
-        {complete ? (
-          <>
-            <span className="eyebrow">SETUP COMPLETE</span>
-            <h1>Your admin account is ready.</h1>
-            <p>Sign in to the Suku administration console with username <strong>albertofori</strong> and the password you just created.</p>
-            <a className="button button-primary" href={`${import.meta.env.VITE_API_URL?.replace(/\/api\/?$/, "") ?? "http://localhost:8000"}/admin/`}>Open the admin console <ArrowRight size={17} /></a>
-          </>
-        ) : (
-          <>
-            <span className="eyebrow">SECURE ACCOUNT SETUP</span>
-            <h1>Create your platform admin password</h1>
-            <p>This one-time link creates the Suku platform administrator account for Albert Ofori. Choose a unique password and keep it private.</p>
-            {error && <div className="alert login-alert" role="alert">{error}</div>}
-            <label htmlFor="admin-password">Password</label>
-            <input id="admin-password" type="password" autoComplete="new-password" minLength={12} maxLength={256} value={password} onChange={(event) => setPassword(event.target.value)} required />
-            <label htmlFor="admin-password-confirm">Confirm password</label>
-            <input id="admin-password-confirm" type="password" autoComplete="new-password" minLength={12} maxLength={256} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required />
-            <button className="button button-primary login-submit" disabled={working || !token}>{working ? "Creating account…" : "Create admin account"}<ArrowRight size={17} /></button>
-          </>
-        )}
-      </form>
-    </div>
   );
 }
 
@@ -159,6 +84,7 @@ function AppLayout({
   onSignOut,
   isAdmin,
   isTeacher,
+  isPlatformAdmin,
 }: {
   user: User;
   subjects: Subject[];
@@ -167,6 +93,7 @@ function AppLayout({
   onSignOut: () => void;
   isAdmin: boolean;
   isTeacher: boolean;
+  isPlatformAdmin: boolean;
 }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -181,7 +108,11 @@ function AppLayout({
           {!isTeacher && <button className={activeLearning ? "nav-link active" : "nav-link"} onClick={() => { navigate("/"); setMobileMenu(false); }}>
             <BookOpen size={18} /> {isAdmin ? "Learning library" : "My learning"}
           </button>}
-          {isAdmin || isTeacher ? (
+          {isPlatformAdmin ? (
+            <button className={location.pathname === "/reports" ? "nav-link active" : "nav-link"} onClick={() => { window.location.assign(DJANGO_ADMIN_URL); setMobileMenu(false); }}>
+              <Users size={18} /> Manage schools
+            </button>
+          ) : isAdmin || isTeacher ? (
             <button className={location.pathname === "/reports" ? "nav-link active" : "nav-link"} onClick={() => { navigate("/reports"); setMobileMenu(false); }}>
               <Users size={18} /> School reports
             </button>
@@ -200,18 +131,18 @@ function AppLayout({
       <main className="main-area">
         <header className="topbar">
           <button className="mobile-menu" aria-label="Open navigation" onClick={() => setMobileMenu(true)}><Menu size={22} /></button>
-          <span className="topbar-context">{isAdmin || isTeacher ? "School workspace" : "Your study space"}</span>
+          <span className="topbar-context">{isPlatformAdmin ? "Platform administration" : isAdmin || isTeacher ? "School workspace" : "Your study space"}</span>
           <div className="topbar-profile"><span className="status-dot" /> {user.first_name || user.username}</div>
         </header>
         <section className="page-content">
           {error && <div className="alert" role="alert"><CircleHelp size={17} />{error}<button aria-label="Dismiss" onClick={() => setError("")}><X size={16} /></button></div>}
         <Routes>
-          <Route path="/" element={isTeacher ? <Navigate to="/reports" replace /> : <Home user={user} subjects={subjects} onSubject={(subject) => navigate(`/subjects/${subject.id}`)} onAdminReports={() => navigate("/reports")} />} />
+          <Route path="/" element={isTeacher ? <Navigate to="/reports" replace /> : <Home user={user} subjects={subjects} onSubject={(subject) => navigate(`/subjects/${subject.id}`)} onAdminReports={() => isPlatformAdmin ? window.location.assign(DJANGO_ADMIN_URL) : navigate("/reports")} />} />
           <Route path="/subjects/:subjectId" element={isTeacher ? <Navigate to="/reports" replace /> : <TopicsRoute subjects={subjects} />} />
           <Route path="/topics/:topicId" element={isTeacher ? <Navigate to="/reports" replace /> : <LessonRoute user={user} />} />
           <Route path="/topics/:topicId/practice" element={isAdmin || isTeacher ? <Navigate to={isTeacher ? "/reports" : "/"} replace /> : <PracticeRoute onError={setError} />} />
           <Route path="/progress" element={user.role !== "student" ? <Navigate to={isTeacher ? "/reports" : "/"} replace /> : <ProgressPage />} />
-          <Route path="/reports" element={isAdmin || isTeacher ? <ReportsPage canManage={isAdmin} onError={setError} /> : <Navigate to="/" replace />} />
+          <Route path="/reports" element={isPlatformAdmin ? <Navigate to="/" replace /> : isAdmin || isTeacher ? <ReportsPage canManage={isAdmin} onError={setError} /> : <Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         </section>
@@ -294,11 +225,12 @@ function Login({ onLogin, onError, error }: { onLogin: (user: User) => Promise<v
 
 function Home({ user, subjects, onSubject, onAdminReports }: { user: User; subjects: Subject[]; onSubject: (subject: Subject) => void; onAdminReports: () => void }) {
   const isAdmin = user.role === "school_admin";
+  const isPlatformAdmin = isAdmin && !user.school_code;
   const greeting = user.first_name ? `Hi, ${user.first_name}` : `Hi, ${user.username}`;
   return (
     <>
-      <div className="welcome-row"><div><span className="eyebrow">{isAdmin ? "SCHOOL OVERVIEW" : "YOUR LEARNING SPACE"}</span><h1>{greeting} <span className="wave">✳</span></h1><p>{isAdmin ? "A quick look at your school's learning space." : "Every question is a step forward. What will you learn today?"}</p></div></div>
-      {isAdmin ? <div className="admin-banner"><div><span className="eyebrow light-eyebrow">SCHOOL ADMIN</span><h2>Help your students find their stride.</h2><p>Review learning activity and add student accounts for your school.</p><button className="button button-light" onClick={onAdminReports}>View school reports <ArrowRight size={16} /></button></div><div className="banner-illustration"><Users size={46} /></div></div> : <StudentWelcome />}
+      <div className="welcome-row"><div><span className="eyebrow">{isPlatformAdmin ? "PLATFORM OVERVIEW" : isAdmin ? "SCHOOL OVERVIEW" : "YOUR LEARNING SPACE"}</span><h1>{greeting} <span className="wave">✳</span></h1><p>{isPlatformAdmin ? "Browse published learning content or manage school access." : isAdmin ? "A quick look at your school's learning space." : "Every question is a step forward. What will you learn today?"}</p></div></div>
+      {isAdmin ? <div className="admin-banner"><div><span className="eyebrow light-eyebrow">{isPlatformAdmin ? "PLATFORM ADMIN" : "SCHOOL ADMIN"}</span><h2>{isPlatformAdmin ? "Manage schools and learning access." : "Help your students find their stride."}</h2><p>{isPlatformAdmin ? "Open the admin console to activate schools and set up their term subscriptions." : "Review learning activity and add student accounts for your school."}</p><button className="button button-light" onClick={onAdminReports}>{isPlatformAdmin ? "Manage schools" : "View school reports"} <ArrowRight size={16} /></button></div><div className="banner-illustration"><Users size={46} /></div></div> : <StudentWelcome />}
       <div className="section-heading"><div><span className="eyebrow">{isAdmin ? "CONTENT LIBRARY" : "PICK UP WHERE YOU LIKE"}</span><h2>{isAdmin ? "Study subjects" : "Explore your subjects"}</h2></div><span className="subject-count">{subjects.length} {subjects.length === 1 ? "subject" : "subjects"}</span></div>
       {subjects.length ? <div className="subject-grid">{subjects.map((subject, index) => <button className={`subject-card card-tone-${index % 3}`} key={subject.id} onClick={() => onSubject(subject)}><span className="subject-icon">{subject.name.toLowerCase().includes("math") ? "∑" : subject.name.toLowerCase().includes("science") ? "✳" : "Aa"}</span><span className="card-arrow"><ArrowRight size={18} /></span><span className="subject-name">{subject.name}</span><span className="subject-description">{subject.description || "Explore lessons and practice questions."}</span><span className="subject-meta"><BookOpen size={14} /> {subject.topic_count} {subject.topic_count === 1 ? "topic" : "topics"}</span></button>)}</div> : <div className="empty-state"><BookOpen size={27} /><h3>Your learning library is getting ready</h3><p>Published subjects will appear here when your school adds syllabus content.</p></div>}
     </>

@@ -4,12 +4,26 @@ from django.contrib.auth.admin import UserAdmin
 from .models import School, SchoolClass, TermSubscription, User
 
 
+class TermSubscriptionInline(admin.TabularInline):
+    model = TermSubscription
+    extra = 1
+    fields = (
+        "term_name",
+        "starts_at",
+        "ends_at",
+        "seat_limit",
+        "status",
+        "paystack_reference",
+    )
+
+
 @admin.register(School)
 class SchoolAdmin(admin.ModelAdmin):
     list_display = ("name", "slug", "status", "created_at")
     list_filter = ("status",)
     search_fields = ("name", "slug")
     prepopulated_fields = {"slug": ("name",)}
+    inlines = (TermSubscriptionInline,)
 
 
 @admin.register(User)

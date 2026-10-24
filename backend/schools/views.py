@@ -139,9 +139,19 @@ class StudentRegistrationView(APIView):
                 .filter(slug__iexact=data["school_code"])
                 .first()
             )
-            if school is None or not school.has_current_subscription or school.status != School.Status.ACTIVE:
+            if school is None:
                 return Response(
-                    {"detail": "This school code is not accepting sign-ups. Check the code or contact your school administrator."},
+                    {"detail": "We could not find that school code. Check the code shown when the school was registered."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if school.status != School.Status.ACTIVE:
+                return Response(
+                    {"detail": "This school is not active yet. Ask the school administrator to activate it."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not school.has_current_subscription:
+                return Response(
+                    {"detail": "This school has no current active subscription. A platform administrator must add a subscription with today's date in its date range before students can sign up."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             if User.objects.filter(school=school).annotate(

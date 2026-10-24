@@ -149,7 +149,7 @@ REST_FRAMEWORK = {
         "user": "120/min",
         "login_ip": "300/min",
         "login_username": "10/min",
-        "signup_ip": "5/hour",
+        "signup_ip": "20/hour",
         "work_check": "5/min",
     },
 }
