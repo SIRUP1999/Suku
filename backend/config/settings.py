@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR.parent / ".env")
+load_dotenv(BASE_DIR / ".env.local")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
@@ -65,7 +66,7 @@ WSGI_APPLICATION = "config.wsgi.application"
 DATABASES = {
     "default": dj_database_url.config(
         default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
-        conn_max_age=600,
+        conn_max_age=0 if os.environ.get("VERCEL") else 600,
     )
 }
 if not DEBUG and DATABASES["default"]["ENGINE"] != "django.db.backends.postgresql":

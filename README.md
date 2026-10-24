@@ -45,6 +45,18 @@ A mobile-friendly, multi-tenant study platform for Ghanaian junior high schools.
 
 The `.env.example` is for local development only. Production defaults to `DEBUG=false`, requires a strong `SECRET_KEY` of at least 50 characters and a PostgreSQL `DATABASE_URL`, redirects HTTP to HTTPS, enables secure cookies, and emits one-year HSTS. Configure `ALLOWED_HOSTS`, `DATABASE_URL`, and CORS for your deployment. If TLS terminates at a trusted load balancer, set `USE_X_FORWARDED_PROTO=true` only when the application cannot be reached except through that proxy. HSTS preload is enabled by default in production; ensure every subdomain supports HTTPS before deployment. Login throttling uses Redis when `CACHE_URL` is set; otherwise production uses Django's shared database cache, which must be initialized with `python manage.py createcachetable`. To use PostgreSQL locally, start `docker compose up -d db` and set `DATABASE_URL=postgres://suku:suku-dev-password@localhost:5432/suku`.
 
+## Prepare a Vercel deployment
+
+The frontend and Django API are configured as two Vercel projects from this repository:
+
+1. Import `SIRUP1999/Suku` into Vercel and set the project root to `frontend`. Vercel detects Vite; keep the default build command and output directory. Set `VITE_API_URL` to the backend deployment URL followed by `/api` (for example, `https://your-api.vercel.app/api`).
+2. Import the same repository as a second Vercel project and set its root to `backend`. Vercel detects Django from `manage.py` and uses `config/wsgi.py`. Add a PostgreSQL database through Vercel's Marketplace (Neon is a suitable managed PostgreSQL option); use the provider's pooled connection URL as `DATABASE_URL`.
+3. Configure the backend project's production environment variables: `DEBUG=false`, a unique random `SECRET_KEY` of at least 50 characters, `DATABASE_URL`, `ALLOWED_HOSTS` set to the backend's exact Vercel hostname, `CORS_ALLOWED_ORIGINS` set to the frontend's exact HTTPS origin, and `USE_X_FORWARDED_PROTO=true`. Add `GEMINI_API_KEY` only if enabling PDF work checking. Never commit these values.
+4. Deploy the API, then set `VITE_API_URL` on the frontend project and deploy the frontend. Apply Django migrations to the production database once, before opening sign-up: from `backend`, link the backend Vercel project and run `vercel env pull .env.local --environment=production`, then run `python manage.py migrate` and `python manage.py createcachetable`. The backend loads this ignored local file for management commands; never share or commit it.
+5. Verify the deployed API, sign-in, school-scoped reports, and student registration before sharing the site. A newly registered school remains pending until a platform administrator activates it and adds a subscription.
+
+Vercel serves each deployment as functions rather than a persistent Django server. Database connections are not kept open across Vercel invocations; use the managed provider's pooled PostgreSQL URL. Deployments, domains, Marketplace database creation, and production environment variables require signing in to the Vercel account.
+
 ## Initial workflows
 
 - School admins create instructor accounts, classes and student accounts in batches, and view score/progress summaries filterable by class, grade and subject. Instructors can view read-only reports and individual student performance for their own school only.
