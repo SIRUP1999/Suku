@@ -13,6 +13,16 @@ class IsSchoolAdmin(BasePermission):
         )
 
 
+class IsSchoolStaff(BasePermission):
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.role in (User.Role.SCHOOL_ADMIN, User.Role.TEACHER)
+            and request.user.school_id
+        )
+
+
 class IsStudent(BasePermission):
     def has_permission(self, request, view):
         return bool(

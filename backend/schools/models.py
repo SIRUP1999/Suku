@@ -42,6 +42,11 @@ class SchoolClass(models.Model):
 
 
 class User(AbstractUser):
+    class Grade(models.IntegerChoices):
+        GRADE_7 = 7, "Grade 7 / JHS 1"
+        GRADE_8 = 8, "Grade 8 / JHS 2"
+        GRADE_9 = 9, "Grade 9 / JHS 3"
+
     class Role(models.TextChoices):
         SCHOOL_ADMIN = "school_admin", "School Admin"
         STUDENT = "student", "Student"
@@ -65,6 +70,7 @@ class User(AbstractUser):
         null=True,
         blank=True,
     )
+    grade = models.PositiveSmallIntegerField(choices=Grade.choices, null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -95,6 +101,10 @@ class User(AbstractUser):
             from django.core.exceptions import ValidationError
 
             raise ValidationError({"school_class": "Only students can be assigned to a class."})
+        if self.grade is not None and self.role != self.Role.STUDENT:
+            from django.core.exceptions import ValidationError
+
+            raise ValidationError({"grade": "Only students can be assigned a grade."})
 
 
 class TermSubscription(models.Model):

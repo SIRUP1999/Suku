@@ -9,11 +9,13 @@ from .views import (
     SchoolStudentDetailView,
     SchoolStudentListView,
     SchoolStudentPerformanceView,
+    SchoolTeacherCreateView,
     StudentProgressView,
     SubjectListView,
     SubjectTopicsView,
     TopicDetailView,
     TopicQuestionsView,
+    WorkCheckView,
 )
 
 urlpatterns = [
@@ -22,8 +24,10 @@ urlpatterns = [
     path("topics/<int:topic_id>/", TopicDetailView.as_view(), name="topic-detail"),
     path("topics/<int:topic_id>/questions/", TopicQuestionsView.as_view(), name="topic-questions"),
     path("attempts/", AttemptView.as_view(), name="attempt-submit"),
+    path("attempts/<int:attempt_id>/work-check/", WorkCheckView.as_view(), name="attempt-work-check"),
     path("progress/", StudentProgressView.as_view(), name="student-progress"),
     path("admin/students/bulk-create/", BulkStudentCreateView.as_view(), name="bulk-students"),
+    path("admin/teachers/", SchoolTeacherCreateView.as_view(), name="school-teachers"),
     path("admin/students/import/", BulkStudentImportView.as_view(), name="bulk-student-import"),
     path("admin/students/", SchoolStudentListView.as_view(), name="school-students"),
     path(

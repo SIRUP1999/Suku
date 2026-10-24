@@ -26,7 +26,7 @@ class SubjectAdmin(admin.ModelAdmin):
 @admin.register(Topic)
 class TopicAdmin(admin.ModelAdmin):
     list_display = ("title", "subject", "is_published", "position")
-    list_filter = ("subject", "is_published")
+    list_filter = ("subject", "grade", "term", "is_published")
     search_fields = ("title", "subject__name")
     inlines = (QuestionInline,)
 

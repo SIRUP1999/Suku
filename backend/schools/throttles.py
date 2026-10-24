@@ -16,3 +16,7 @@ class LoginUsernameThrottle(SimpleRateThrottle):
         username = str(data.get("username", "")).strip().lower()
         identity = hashlib.sha256(f"{school_code}:{username}".encode()).hexdigest()
         return self.cache_format % {"scope": self.scope, "ident": identity}
+
+
+class SignupIPThrottle(AnonRateThrottle):
+    scope = "signup_ip"

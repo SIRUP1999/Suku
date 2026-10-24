@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR.parent / ".env")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
 SECRET_KEY = os.environ.get("SECRET_KEY", "")
 if not SECRET_KEY:
@@ -139,12 +141,15 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_CLASSES": [
         "rest_framework.throttling.AnonRateThrottle",
         "rest_framework.throttling.UserRateThrottle",
+        "rest_framework.throttling.ScopedRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
         "anon": "30/min",
         "user": "120/min",
         "login_ip": "300/min",
         "login_username": "10/min",
+        "signup_ip": "5/hour",
+        "work_check": "5/min",
     },
 }
 SIMPLE_JWT = {

@@ -20,11 +20,22 @@ class Subject(models.Model):
 
 
 class Topic(models.Model):
+    class Grade(models.IntegerChoices):
+        GRADE_7 = 7, "Grade 7 / JHS 1"
+        GRADE_8 = 8, "Grade 8 / JHS 2"
+        GRADE_9 = 9, "Grade 9 / JHS 3"
+
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name="topics")
     title = models.CharField(max_length=200)
     slug = models.SlugField()
     summary = models.TextField(blank=True)
     content = models.TextField(blank=True)
+    grade = models.PositiveSmallIntegerField(choices=Grade.choices, null=True, blank=True)
+    term = models.PositiveSmallIntegerField(
+        choices=((1, "Term 1"), (2, "Term 2"), (3, "Term 3")),
+        null=True,
+        blank=True,
+    )
     position = models.PositiveIntegerField(default=0)
     is_published = models.BooleanField(default=False)
 
@@ -69,13 +80,38 @@ class Question(models.Model):
 
     def clean(self):
         super().clean()
+        valid_options = (
+            isinstance(self.options, list)
+            and len(self.options) >= 2
+            and all(isinstance(option, str) for option in self.options)
+            and len(self.options) == len(set(self.options))
+        )
         if self.kind == self.Kind.MCQ:
-            if not isinstance(self.options, list) or len(self.options) < 2:
+            if not valid_options:
                 raise ValidationError({"options": "MCQs need at least two answer options."})
             if self.correct_answer not in self.options:
-                raise ValidationError({"correct_answer": "Choose the correct answer from the options."})
-        elif self.kind == self.Kind.THEORY and not (self.expected_answer or self.rubric):
-            raise ValidationError({"rubric": "Theory questions need an expected answer or grading rubric."})
+                raise ValidationError(
+                    {"correct_answer": "Choose the correct answer from the options."}
+                )
+        elif self.kind == self.Kind.THEORY:
+            if not (self.expected_answer or self.rubric):
+                raise ValidationError(
+                    {"rubric": "Theory questions need an expected answer or grading rubric."}
+                )
+            if not self.options:
+                if self.correct_answer:
+                    raise ValidationError(
+                        {"correct_answer": "Free-response questions do not have a single correct answer option."}
+                    )
+                return
+            if not valid_options:
+                raise ValidationError(
+                    {"options": "Written-work questions need at least two answer choices."}
+                )
+            if self.correct_answer not in self.options:
+                raise ValidationError(
+                    {"correct_answer": "Choose the correct answer from the options."}
+                )
 
 
 class Attempt(models.Model):
@@ -101,5 +137,6 @@ class Attempt(models.Model):
         super().clean()
         if self.student_id and self.school_id and self.student.school_id != self.school_id:
             raise ValidationError({"school": "Attempt school must match the student's school."})
+
     def __str__(self):
         return f"{self.student} — {self.question}"

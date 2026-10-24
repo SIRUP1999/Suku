@@ -8,6 +8,8 @@ export type User = {
   role: "school_admin" | "student" | "teacher";
   school_name: string | null;
   school_code: string | null;
+  grade: number | null;
+  grade_label: string | null;
 };
 
 export type Subject = { id: number; name: string; slug: string; description: string; topic_count: number };
@@ -18,15 +20,20 @@ export type Topic = {
   slug: string;
   summary: string;
   content: string;
+  grade: number | null;
+  term: number | null;
   question_count: number;
 };
 export type SchoolClass = { id: number; name: string };
-export type NewStudent = { username: string; password: string; first_name: string; last_name: string; class_id: number | null };
+export type NewStudent = { username: string; password: string; first_name: string; last_name: string; grade: number; class_id: number | null };
+export type NewTeacher = { username: string; password: string; first_name: string; last_name: string };
 export type SchoolStudent = {
   id: number;
   username: string;
   first_name: string;
   last_name: string;
+  grade: number | null;
+  grade_label: string | null;
   class_name: string | null;
   is_active: boolean;
   total_attempts: number;
@@ -38,6 +45,8 @@ export type StudentPerformance = {
     username: string;
     first_name: string;
     last_name: string;
+    grade: number | null;
+    grade_label: string | null;
     class_name: string | null;
     is_active: boolean;
   };
@@ -71,7 +80,9 @@ export type Question = {
   prompt: string;
   options: string[];
   difficulty: "easy" | "medium" | "hard";
+  work_check_available: boolean;
 };
+export type StructuredQuestion = Question & { kind: "theory"; options: [] };
 export type Attempt = {
   id: number;
   question: number;
@@ -83,10 +94,18 @@ export type Attempt = {
   score: number | null;
   feedback: string;
   correct_answer: string;
+  worked_solution: string;
+  mark_guide: string;
+  question_kind: "mcq" | "theory";
   created_at: string;
 };
+export type WorkCheck = {
+  status: "correct" | "partly_correct" | "incorrect" | "unreadable";
+  feedback: string;
+  worked_solution: string;
+};
 export type Progress = {
-  summary: { total_attempts: number; correct_attempts: number; average_score: number };
+  summary: { total_attempts: number; correct_attempts: number; scored_attempts: number; average_score: number };
   attempts: Attempt[];
 };
 export type Report = {
@@ -98,7 +117,7 @@ export type Report = {
   subscription: { term_name: string; starts_at: string; ends_at: string; seat_limit: number; status: string; is_current: boolean } | null;
   summary: { total_attempts: number; correct_attempts: number; average_score: number };
   subjects: Array<{ question__topic__subject__id: number; question__topic__subject__name: string; attempts: number; correct: number; average_score: number | null }>;
-  students: Array<{ id: number; username: string; first_name: string; last_name: string; class_name: string | null; is_active: boolean; total_attempts: number; average_score: number | null }>;
+  students: Array<{ id: number; username: string; first_name: string; last_name: string; grade: number | null; class_name: string | null; is_active: boolean; total_attempts: number; average_score: number | null }>;
 };
 
 type Tokens = { access: string; refresh: string; user: User };
@@ -155,18 +174,32 @@ async function request<T>(path: string, options: RequestInit = {}, mayRefresh = 
 export const api = {
   login: (school_code: string, username: string, password: string) =>
     request<Tokens>("/auth/login/", { method: "POST", body: JSON.stringify({ school_code, username, password }) }),
+  registerSchool: (data: { school_name: string; first_name: string; last_name: string; username: string; password: string }) =>
+    request<{ detail: string; school_name: string; school_code: string }>("/auth/register-school/", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  registerStudent: (data: { school_code: string; first_name: string; last_name: string; username: string; password: string; grade: number }) =>
+    request<Tokens>("/auth/register-student/", { method: "POST", body: JSON.stringify(data) }),
   me: () => request<User>("/auth/me/"),
   subjects: () => request<Subject[]>("/subjects/"),
-  topics: (subjectId: number) => request<Topic[]>(`/subjects/${subjectId}/topics/`),
+  topics: (subjectId: number, grade?: number) =>
+    request<Topic[]>(`/subjects/${subjectId}/topics/${grade ? `?grade=${grade}` : ""}`),
   topic: (topicId: number) => request<Topic>(`/topics/${topicId}/`),
   questions: (topicId: number) => request<Question[]>(`/topics/${topicId}/questions/`),
   submit: (questionId: number, answer: string) =>
     request<Attempt>("/attempts/", { method: "POST", body: JSON.stringify({ question_id: questionId, answer }) }),
+  checkWork: (attemptId: number, file: File) => {
+    const data = new FormData();
+    data.set("work", file);
+    return request<WorkCheck>(`/attempts/${attemptId}/work-check/`, { method: "POST", body: data });
+  },
   progress: () => request<Progress>("/progress/"),
-  report: (filters: { class_id?: number; subject_id?: number } = {}) => {
+  report: (filters: { class_id?: number; subject_id?: number; grade?: number } = {}) => {
     const params = new URLSearchParams();
     if (filters.class_id) params.set("class_id", String(filters.class_id));
     if (filters.subject_id) params.set("subject_id", String(filters.subject_id));
+    if (filters.grade) params.set("grade", String(filters.grade));
     const query = params.size ? `?${params.toString()}` : "";
     return request<Report>(`/admin/reports/${query}`);
   },
@@ -176,6 +209,11 @@ export const api = {
     request<{ created: number; usernames: string[] }>("/admin/students/bulk-create/", {
       method: "POST",
       body: JSON.stringify({ students }),
+    }),
+  createTeacher: (teacher: NewTeacher) =>
+    request<{ id: number; username: string; first_name: string; last_name: string; school_name: string; school_code: string; role: "teacher" }>("/admin/teachers/", {
+      method: "POST",
+      body: JSON.stringify(teacher),
     }),
   importStudents: (file: File) => {
     const data = new FormData();

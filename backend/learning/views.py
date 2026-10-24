@@ -1,6 +1,7 @@
 import csv
 import io
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Avg, Count, F, Q
 from django.db.models.functions import Lower
@@ -11,9 +12,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from schools.models import SchoolClass, TermSubscription, User
-from schools.permissions import IsSchoolAdmin, IsStudent
+from schools.permissions import IsSchoolAdmin, IsSchoolStaff, IsStudent
 from schools.views import has_school_access
 
+from .ai import GeminiWorkCheckError, check_written_work
 from .models import Attempt, Question, Subject, Topic
 from .permissions import HasActiveSchoolAccess
 from .serializers import (
@@ -27,6 +29,7 @@ from .serializers import (
     StudentPasswordResetSerializer,
     StudentStatusSerializer,
     SubjectSerializer,
+    TeacherAccountSerializer,
     TopicSerializer,
 )
 
@@ -45,9 +48,21 @@ class SubjectTopicsView(APIView):
     permission_classes = [HasActiveSchoolAccess]
 
     def get(self, request, subject_id):
+        grade = request.query_params.get("grade")
         topics = Topic.objects.filter(
             subject_id=subject_id, subject__is_published=True, is_published=True
-        ).annotate(question_count=Count("questions", filter=Q(questions__is_published=True)))
+        )
+        if grade:
+            valid_grades = {str(value) for value, _ in Topic.Grade.choices}
+            if grade not in valid_grades:
+                return Response(
+                    {"grade": "Choose Grade 7, 8, or 9."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            topics = topics.filter(grade=int(grade))
+        topics = topics.annotate(
+            question_count=Count("questions", filter=Q(questions__is_published=True))
+        )
         return Response(TopicSerializer(topics, many=True).data)
 
 
@@ -59,7 +74,7 @@ class TopicDetailView(APIView):
             topic = Topic.objects.annotate(
                 question_count=Count(
                     "questions",
-                    filter=Q(questions__is_published=True, questions__kind=Question.Kind.MCQ),
+                    filter=Q(questions__is_published=True),
                 )
             ).get(
                 id=topic_id,
@@ -80,7 +95,6 @@ class TopicQuestionsView(APIView):
             topic__is_published=True,
             topic__subject__is_published=True,
             is_published=True,
-            kind=Question.Kind.MCQ,
         )
         return Response(QuestionSerializer(questions, many=True).data)
 
@@ -94,7 +108,6 @@ class AttemptView(APIView):
         try:
             question = Question.objects.select_related("topic__subject").get(
                 id=serializer.validated_data["question_id"],
-                kind=Question.Kind.MCQ,
                 is_published=True,
                 topic__is_published=True,
                 topic__subject__is_published=True,
@@ -103,26 +116,99 @@ class AttemptView(APIView):
             return Response({"detail": "Question not found."}, status=status.HTTP_404_NOT_FOUND)
 
         answer = serializer.validated_data["answer"]
-        if answer not in question.options:
+        is_free_response = question.kind == Question.Kind.THEORY and not question.options
+        if is_free_response and not answer.strip():
+            return Response(
+                {"answer": "Write your working before submitting."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not is_free_response and answer not in question.options:
             return Response(
                 {"detail": "Choose one of the available options."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        is_correct = answer == question.correct_answer
+        is_correct = None if is_free_response else answer == question.correct_answer
         attempt = Attempt.objects.create(
             school=request.user.school,
             student=request.user,
             question=question,
             submitted_answer=answer,
             is_correct=is_correct,
-            score=100 if is_correct else 0,
+            score=None if is_free_response else 100 if is_correct else 0,
             feedback=(
-                "Correct! Great work."
+                "Your written response is saved. It is not marked automatically; compare your working with the step-by-step solution and mark guide."
+                if is_free_response
+                else "Correct! Great work."
                 if is_correct
-                else question.explanation or "Review the method, then try a similar question."
+                else "Not quite. Review the worked solution and try the method again."
             ),
         )
         return Response(AttemptResultSerializer(attempt).data, status=status.HTTP_201_CREATED)
+
+
+class WorkCheckView(APIView):
+    permission_classes = [HasActiveSchoolAccess, IsStudent]
+    parser_classes = [MultiPartParser, FormParser]
+    throttle_scope = "work_check"
+    maximum_pdf_bytes = 10 * 1024 * 1024
+
+    def post(self, request, attempt_id):
+        if not settings.GEMINI_API_KEY:
+            return Response(
+                {
+                    "detail": (
+                        "PDF work checking is not configured yet. "
+                        "Please ask your school administrator."
+                    )
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            attempt = Attempt.objects.select_related("question").get(
+                id=attempt_id,
+                student=request.user,
+                school=request.user.school,
+                question__kind=Question.Kind.THEORY,
+            )
+        except Attempt.DoesNotExist:
+            return Response(
+                {"detail": "Theory attempt not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        uploaded = request.FILES.get("work")
+        if uploaded is None:
+            return Response(
+                {"work": "Upload a PDF of your written work."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if uploaded.size > self.maximum_pdf_bytes:
+            return Response(
+                {"work": "PDF files must be 10 MB or smaller."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not uploaded.name.lower().endswith(".pdf"):
+            return Response({"work": "Upload a PDF file."}, status=status.HTTP_400_BAD_REQUEST)
+        if uploaded.read(5) != b"%PDF-":
+            return Response(
+                {"work": "This file does not appear to be a valid PDF."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        uploaded.seek(0)
+
+        try:
+            result = check_written_work(
+                api_key=settings.GEMINI_API_KEY,
+                model=settings.GEMINI_MODEL,
+                prompt=attempt.question.prompt,
+                expected_answer=attempt.question.expected_answer,
+                rubric=attempt.question.rubric,
+                pdf_bytes=uploaded.read(),
+            )
+        except GeminiWorkCheckError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_502_BAD_GATEWAY)
+        return Response(result)
 
 
 class StudentProgressView(APIView):
@@ -133,6 +219,7 @@ class StudentProgressView(APIView):
         summary = attempts.aggregate(
             total=Count("id"),
             correct=Count("id", filter=Q(is_correct=True)),
+            scored=Count("id", filter=Q(score__isnull=False)),
             average_score=Avg("score"),
         )
         recent = attempts.select_related("question__topic__subject")[:30]
@@ -141,6 +228,7 @@ class StudentProgressView(APIView):
                 "summary": {
                     "total_attempts": summary["total"] or 0,
                     "correct_attempts": summary["correct"] or 0,
+                    "scored_attempts": summary["scored"] or 0,
                     "average_score": round(summary["average_score"] or 0, 1),
                 },
                 "attempts": AttemptResultSerializer(recent, many=True).data,
@@ -212,6 +300,7 @@ class BulkStudentCreateView(APIView):
                         role=User.Role.STUDENT,
                         school=school,
                         school_class=classes.get(entry.get("class_id")),
+                        grade=int(entry["grade"]),
                     )
                     for entry in students
                 ]
@@ -256,11 +345,17 @@ class BulkStudentImportView(APIView):
 
         try:
             reader = csv.DictReader(io.StringIO(text, newline=""))
-            required_headers = {"username", "password"}
+            required_headers = {
+                "username",
+                "password",
+                "first_name",
+                "last_name",
+                "grade",
+            }
             headers = {header.strip().lower() for header in (reader.fieldnames or [])}
             if not required_headers.issubset(headers):
                 return Response(
-                    {"detail": "CSV must include username and password columns."},
+                    {"detail": "CSV must include username, password, first_name, last_name and grade columns."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             rows = []
@@ -299,6 +394,7 @@ class BulkStudentImportView(APIView):
                         "password": row.get("password", ""),
                         "first_name": row.get("first_name", ""),
                         "last_name": row.get("last_name", ""),
+                        "grade": row.get("grade", "").strip(),
                         "class_id": class_id,
                     }
                 )
@@ -315,7 +411,7 @@ class BulkStudentImportView(APIView):
 
 
 class SchoolStudentListView(APIView):
-    permission_classes = [HasActiveSchoolAccess, IsSchoolAdmin]
+    permission_classes = [HasActiveSchoolAccess, IsSchoolStaff]
 
     def get(self, request):
         students = User.objects.filter(
@@ -328,7 +424,7 @@ class SchoolStudentListView(APIView):
 
 
 class SchoolStudentPerformanceView(APIView):
-    permission_classes = [HasActiveSchoolAccess, IsSchoolAdmin]
+    permission_classes = [HasActiveSchoolAccess, IsSchoolStaff]
 
     def get(self, request, student_id):
         student = User.objects.filter(
@@ -425,6 +521,8 @@ class SchoolStudentPerformanceView(APIView):
                     "username": student.username,
                     "first_name": student.first_name,
                     "last_name": student.last_name,
+                    "grade": student.grade,
+                    "grade_label": student.get_grade_display(),
                     "class_name": (
                         student.school_class.name if student.school_class else None
                     ),
@@ -535,14 +633,58 @@ class SchoolClassesView(APIView):
         return Response(SchoolClassSerializer(school_class).data, status=status.HTTP_201_CREATED)
 
 
-class SchoolReportsView(APIView):
+class SchoolTeacherCreateView(APIView):
     permission_classes = [HasActiveSchoolAccess, IsSchoolAdmin]
+
+    def post(self, request):
+        serializer = TeacherAccountSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        school = request.user.school
+        if User.objects.filter(school=school).annotate(
+            normalized_username=Lower("username")
+        ).filter(normalized_username=data["username"].lower()).exists():
+            return Response(
+                {"username": "That username is already used at this school."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            teacher = User.objects.create_user(
+                username=data["username"],
+                password=data["password"],
+                first_name=data["first_name"],
+                last_name=data["last_name"],
+                role=User.Role.TEACHER,
+                school=school,
+            )
+        except IntegrityError:
+            return Response(
+                {"username": "That username is already used at this school."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            {
+                "id": teacher.id,
+                "username": teacher.username,
+                "first_name": teacher.first_name,
+                "last_name": teacher.last_name,
+                "school_name": school.name,
+                "school_code": school.slug,
+                "role": teacher.role,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class SchoolReportsView(APIView):
+    permission_classes = [HasActiveSchoolAccess, IsSchoolStaff]
 
     def get(self, request):
         filters = ReportFilterSerializer(data=request.query_params)
         filters.is_valid(raise_exception=True)
         class_id = filters.validated_data.get("class_id")
         subject_id = filters.validated_data.get("subject_id")
+        grade = filters.validated_data.get("grade")
         school_classes = SchoolClass.objects.filter(school=request.user.school)
         if class_id and not school_classes.filter(id=class_id).exists():
             return Response({"detail": "Class not found."}, status=status.HTTP_404_NOT_FOUND)
@@ -552,6 +694,8 @@ class SchoolReportsView(APIView):
         attempts = Attempt.objects.filter(school=request.user.school)
         if class_id:
             attempts = attempts.filter(student__school_class_id=class_id)
+        if grade:
+            attempts = attempts.filter(student__grade=grade)
         if subject_id:
             attempts = attempts.filter(question__topic__subject_id=subject_id)
         report = attempts.aggregate(
@@ -572,6 +716,8 @@ class SchoolReportsView(APIView):
         student_attempt_filter = Q(attempts__school=request.user.school)
         if class_id:
             student_query = student_query.filter(school_class_id=class_id)
+        if grade:
+            student_query = student_query.filter(grade=grade)
         if subject_id:
             student_attempt_filter &= Q(attempts__question__topic__subject_id=subject_id)
         students = (
@@ -588,6 +734,7 @@ class SchoolReportsView(APIView):
                 "last_name",
                 "is_active",
                 "class_name",
+                "grade",
                 "total_attempts",
                 "average_score",
             )
