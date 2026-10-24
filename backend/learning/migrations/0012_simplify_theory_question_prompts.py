@@ -16,6 +16,7 @@ def simplify_theory_prompts(apps, schema_editor):
         topic__subject__slug="mathematics",
         topic__is_published=True,
     )
+    updated_questions = []
     for question in questions.iterator():
         if question.prompt.startswith(PREFIX) and question.prompt.endswith(SUFFIX):
             question.prompt = question.prompt[len(PREFIX):-len(SUFFIX)]
@@ -24,7 +25,13 @@ def simplify_theory_prompts(apps, schema_editor):
                 "2 marks for clear and correct working, and 1 mark for the "
                 "correct final answer with units or simplest form where needed."
             )
-            question.save(update_fields=("prompt", "rubric"))
+            updated_questions.append(question)
+    if updated_questions:
+        Question.objects.bulk_update(
+            updated_questions,
+            fields=("prompt", "rubric"),
+            batch_size=500,
+        )
 
 
 class Migration(migrations.Migration):

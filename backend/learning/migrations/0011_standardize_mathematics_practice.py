@@ -88,6 +88,7 @@ def expand_and_standardize(apps, schema_editor):
                 is_published=True,
             ).values_list("prompt", flat=True)
         )
+        new_questions = []
         added = 0
         candidate_index = 20
         while len(existing_prompts) < 40:
@@ -98,33 +99,41 @@ def expand_and_standardize(apps, schema_editor):
                 candidate_index += 1
             if data["prompt"] in existing_prompts:
                 continue
-            Question.objects.create(topic=topic, **data)
+            new_questions.append(Question(topic=topic, **data))
             existing_prompts.add(data["prompt"])
             added += 1
+        if new_questions:
+            Question.objects.bulk_create(new_questions, batch_size=500)
 
-        for index, question in enumerate(
+        objective_questions = list(
             Question.objects.filter(
                 topic=topic,
                 kind="mcq",
                 is_published=True,
             ).order_by("id")
-        ):
+        )
+        for index, question in enumerate(objective_questions):
             if index < 20:
                 question.difficulty = (
                     "easy" if index < 6 else "medium" if index < 15 else "hard"
                 )
             else:
                 question.difficulty = objective_difficulty(index - 20)
-            question.save(update_fields=("difficulty",))
+        if objective_questions:
+            Question.objects.bulk_update(
+                objective_questions,
+                fields=("difficulty",),
+                batch_size=500,
+            )
 
-        for number, question in enumerate(
+        theory_questions = list(
             Question.objects.filter(
                 topic=topic,
                 kind="theory",
                 is_published=True,
             ).order_by("id"),
-            start=1,
-        ):
+        )
+        for question in theory_questions:
             original_prompt = question.prompt
             instruction = "Show your working step by step on paper before choosing an answer.\n\n"
             if original_prompt.startswith(instruction):
@@ -143,8 +152,11 @@ def expand_and_standardize(apps, schema_editor):
                 "(c) 1 mark for the correct final answer, including units or simplest "
                 "form where needed."
             )
-            question.save(
-                update_fields=("prompt", "expected_answer", "rubric")
+        if theory_questions:
+            Question.objects.bulk_update(
+                theory_questions,
+                fields=("prompt", "expected_answer", "rubric"),
+                batch_size=500,
             )
 
 
