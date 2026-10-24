@@ -21,6 +21,7 @@ import { api, getToken, setToken, setTokens, type Attempt, type NewStudent, type
 
 function App() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [user, setUser] = useState<User | null>(null);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [error, setError] = useState("");
@@ -46,6 +47,10 @@ function App() {
       .catch(() => setToken(null));
   }, [finishLogin]);
 
+  if (location.pathname === "/admin-setup") {
+    return <PlatformAdminSetup />;
+  }
+
   async function signOut() {
     setToken(null);
     setUser(null);
@@ -69,6 +74,80 @@ function App() {
       isAdmin={isAdmin}
       isTeacher={isTeacher}
     />
+  );
+}
+
+function PlatformAdminSetup() {
+  const [token] = useState(() => window.location.hash.slice(1));
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+  const [complete, setComplete] = useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setError("");
+    if (!token) {
+      setError("This setup link is missing its one-time authorization. Please request a new link.");
+      return;
+    }
+    if (password !== confirmation) {
+      setError("The passwords do not match.");
+      return;
+    }
+    setWorking(true);
+    try {
+      const response = await fetch(`${import.meta.env.VITE_API_URL ?? "http://localhost:8000/api"}/platform-admin/setup/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ password }),
+      });
+      const result = await response.json() as { detail?: string | string[] };
+      if (!response.ok) {
+        setError(Array.isArray(result.detail) ? result.detail.join(" ") : result.detail ?? "Unable to create the administrator account.");
+        return;
+      }
+      window.history.replaceState(null, "", window.location.pathname);
+      setPassword("");
+      setConfirmation("");
+      setComplete(true);
+    } catch {
+      setError("Could not reach Suku. Check your connection and try again.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <div className="admin-setup-page">
+      <form className="admin-setup-card" onSubmit={submit}>
+        <div className="brand"><span className="brand-mark"><GraduationCap size={22} /></span><span>Suku<span className="brand-dot">.</span></span></div>
+        {complete ? (
+          <>
+            <span className="eyebrow">SETUP COMPLETE</span>
+            <h1>Your admin account is ready.</h1>
+            <p>Sign in to the Suku administration console with username <strong>albertofori</strong> and the password you just created.</p>
+            <a className="button button-primary" href={`${import.meta.env.VITE_API_URL?.replace(/\/api\/?$/, "") ?? "http://localhost:8000"}/admin/`}>Open the admin console <ArrowRight size={17} /></a>
+          </>
+        ) : (
+          <>
+            <span className="eyebrow">SECURE ACCOUNT SETUP</span>
+            <h1>Create your platform admin password</h1>
+            <p>This one-time link creates the Suku platform administrator account for Albert Ofori. Choose a unique password and keep it private.</p>
+            {error && <div className="alert login-alert" role="alert">{error}</div>}
+            <label htmlFor="admin-password">Password</label>
+            <input id="admin-password" type="password" autoComplete="new-password" minLength={12} maxLength={256} value={password} onChange={(event) => setPassword(event.target.value)} required />
+            <label htmlFor="admin-password-confirm">Confirm password</label>
+            <input id="admin-password-confirm" type="password" autoComplete="new-password" minLength={12} maxLength={256} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required />
+            <button className="button button-primary login-submit" disabled={working || !token}>{working ? "Creating account…" : "Create admin account"}<ArrowRight size={17} /></button>
+          </>
+        )}
+      </form>
+    </div>
   );
 }
 
