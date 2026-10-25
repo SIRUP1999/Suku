@@ -1,5 +1,7 @@
+from decimal import Decimal
 from fractions import Fraction
 from math import gcd
+import re
 
 from django.db import migrations
 
@@ -34,7 +36,348 @@ def build_options(answer, distractors, variant):
     return options, str(answer)
 
 
+def insert_working_before_answer(solution, heading, details):
+    working = f"{heading}\n" + "\n".join(details)
+    answer = re.search(r"(?im)^\s*(?:Final )?Answer\s*:", solution)
+    if answer:
+        return f"{solution[:answer.start()].rstrip()}\n\n{working}\n{solution[answer.start():]}"
+    return f"{solution.rstrip()}\n\n{working}"
+
+
+def division_working(dividend, divisor):
+    if dividend < 0 or divisor <= 0:
+        return ""
+
+    quotient, remainder = divmod(dividend, divisor)
+    if quotient == 0:
+        common_factor = gcd(dividend, divisor)
+        reduced = Fraction(dividend, divisor)
+        if common_factor > 1:
+            return (
+                f"The dividend {dividend} is smaller than the divisor {divisor}, "
+                f"so the quotient is less than 1. Simplify the fraction by "
+                f"dividing top and bottom by {common_factor}: "
+                f"{dividend} ÷ {common_factor} = {reduced.numerator}, "
+                f"{divisor} ÷ {common_factor} = {reduced.denominator}. "
+                f"This gives [[frac:{reduced.numerator}|{reduced.denominator}]]."
+            )
+        return (
+            f"The dividend {dividend} is smaller than the divisor {divisor}, "
+            f"so the quotient is less than 1. The exact quotient is "
+            f"[[frac:{dividend}|{divisor}]]."
+        )
+
+    digits = str(dividend)
+    first_digit = next(
+        index for index in range(len(digits))
+        if int(digits[: index + 1]) >= divisor
+    )
+    current = int(digits[: first_digit + 1])
+    first_quotient_digit, remainder = divmod(current, divisor)
+    first_time_word = "time" if first_quotient_digit == 1 else "times"
+    steps = [
+        f"Start with {current}. {divisor} goes into {current} "
+        f"{first_quotient_digit} {first_time_word}, because {divisor} × "
+        f"{first_quotient_digit} = {divisor * first_quotient_digit}. "
+        f"Subtract: {current} − {divisor * first_quotient_digit} = {remainder}."
+    ]
+    quotient_digits = [str(first_quotient_digit)]
+
+    for digit in digits[first_digit + 1 :]:
+        current = remainder * 10 + int(digit)
+        quotient_digit = current // divisor
+        time_word = "time" if quotient_digit == 1 else "times"
+        steps.append(
+            f"Bring down the next digit {digit}: {remainder} × 10 + "
+            f"{digit} = {current}. {divisor} goes into {current} "
+            f"{quotient_digit} {time_word}, because {divisor} × "
+            f"{quotient_digit} = {divisor * quotient_digit}. "
+            f"Subtract: {current} − {divisor * quotient_digit} = "
+            f"{current % divisor}."
+        )
+        quotient_digits.append(str(quotient_digit))
+        remainder = current % divisor
+
+    quotient_text = "".join(quotient_digits)
+    working = "\n".join(steps)
+    result = f"The quotient digits make {quotient_text}."
+    if remainder:
+        result += f" The remainder is {remainder}."
+    else:
+        result += " The remainder is 0, so the division is exact."
+    return f"Long division:\n{working}\n{result}"
+
+
+def add_division_workings(solution):
+    if "Let's show each division:" in solution:
+        return solution
+    pattern = re.compile(
+        r"(?P<dividend>\d+)\s*÷\s*(?P<divisor>\d+)\s*=\s*"
+        r"(?:GH₵\s*)?(?P<quotient>\d+)"
+    )
+    details = []
+    seen = set()
+    for match in pattern.finditer(solution):
+        dividend = int(match.group("dividend"))
+        divisor = int(match.group("divisor"))
+        key = dividend, divisor
+        if key in seen:
+            continue
+        seen.add(key)
+        details.append(
+            f"Write the division as [[frac:{dividend}|{divisor}]].\n"
+            f"{division_working(dividend, divisor)}"
+        )
+    action_pattern = re.compile(
+        r"Divide (?:both sides )?by (?P<divisor>\d+)\s*[:,]?\s*"
+        r"(?P<variable>[a-z])\s*=\s*(?P<quotient>\d+)",
+        re.IGNORECASE,
+    )
+    for match in action_pattern.finditer(solution):
+        divisor = int(match.group("divisor"))
+        quotient = int(match.group("quotient"))
+        dividend = divisor * quotient
+        if re.search(
+            rf"{dividend}\s*÷\s*{divisor}\s*=\s*{quotient}",
+            solution,
+        ):
+            continue
+        details.append(
+            f"The dividend is {divisor} × {quotient} = {dividend}, so write "
+            f"the division as [[frac:{dividend}|{divisor}]].\n"
+            f"{division_working(dividend, divisor)}"
+        )
+    if not details:
+        return solution
+    return insert_working_before_answer(solution, "Let's show each division:", details)
+
+
+def arithmetic_workings(solution):
+    pattern = re.compile(
+        r"(?<![\w.\-−])(?P<left>\d+)\s*(?P<operator>[+−×\-])\s*"
+        r"(?P<right>\d+)\s*=\s*(?:GH₵\s*)?(?P<answer>[-−]?\d+)(?!\w|\.\d)"
+    )
+    details = []
+    seen = set()
+    for match in pattern.finditer(solution):
+        left = int(match.group("left"))
+        right = int(match.group("right"))
+        answer = int(match.group("answer").replace("−", "-"))
+        operator = match.group("operator")
+        key = left, operator, right, answer
+        if key in seen:
+            continue
+        seen.add(key)
+
+        if operator == "+":
+            tens = right // 10 * 10
+            ones = right % 10
+            if tens and ones:
+                details.append(
+                    f"Split {right} into {tens} and {ones}. Then "
+                    f"{left} + {tens} = {left + tens}, and "
+                    f"{left + tens} + {ones} = {answer}."
+                )
+            else:
+                details.append(
+                    f"Add the amounts: {left} + {right} = {answer}."
+                )
+        elif operator in ("−", "-") and left >= right:
+            left_digits = list(map(int, str(left)))
+            right_digits = list(map(int, str(right).zfill(len(left_digits))))
+            places = [
+                ("one", "ones"),
+                ("ten", "tens"),
+                ("hundred", "hundreds"),
+                ("thousand", "thousands"),
+                ("ten thousand", "ten thousands"),
+                ("hundred thousand", "hundred thousands"),
+                ("million", "millions"),
+            ]
+            subtraction_steps = []
+            for index in range(len(left_digits) - 1, -1, -1):
+                if left_digits[index] < right_digits[index]:
+                    borrow_from = index - 1
+                    while borrow_from >= 0 and left_digits[borrow_from] == 0:
+                        borrow_from -= 1
+                    if borrow_from >= 0:
+                        left_digits[borrow_from] -= 1
+                        for middle in range(borrow_from + 1, index):
+                            left_digits[middle] = 9
+                        left_digits[index] += 10
+                        place_singular, place_plural = places[len(left_digits) - index - 1]
+                        if borrow_from == index - 1:
+                            donor_singular, donor_plural = places[
+                                len(left_digits) - borrow_from - 1
+                            ]
+                            subtraction_steps.append(
+                                f"Regroup 1 {donor_singular} as 10 {place_plural}: "
+                                f"the {donor_plural} digit decreases by 1 and "
+                                f"the {place_plural} digit becomes {left_digits[index]}."
+                            )
+                        else:
+                            subtraction_steps.append(
+                                f"Regroup across the zero columns to make enough "
+                                f"{place_plural}: the {place_plural} digit becomes "
+                                f"{left_digits[index]} and each passed zero becomes 9."
+                            )
+                place_singular, place_plural = places[len(left_digits) - index - 1]
+                subtraction_steps.append(
+                    f"{place_plural.capitalize()}: {left_digits[index]} − "
+                    f"{right_digits[index]} = "
+                    f"{left_digits[index] - right_digits[index]} {place_plural}."
+                )
+            subtraction_steps.append(
+                f"Combine the place values to get {answer}."
+            )
+            details.append(" ".join(subtraction_steps))
+        elif operator in ("−", "-"):
+            details.append(
+                f"Because {left} is smaller than {right}, the answer is negative. "
+                f"Find the difference: {right} − {left} = {right - left}. "
+                f"Therefore {left} − {right} = {answer}."
+            )
+        elif operator == "×":
+            if right >= 10:
+                place_values = []
+                place = 1
+                remaining = right
+                while remaining:
+                    digit = remaining % 10
+                    if digit:
+                        place_values.append(digit * place)
+                    remaining //= 10
+                    place *= 10
+                partial_products = [left * place_value for place_value in place_values]
+                detail = "; ".join(
+                    f"{left} × {place_value} = {partial}"
+                    for place_value, partial in zip(place_values, partial_products)
+                )
+                details.append(
+                    f"Split {right} into its place values ({' + '.join(map(str, reversed(place_values)))}). "
+                    f"{detail}. Add the partial products: "
+                    f"{' + '.join(map(str, partial_products))} = {answer}."
+                )
+            else:
+                details.append(
+                    f"Multiplication means {left} added {right} times: "
+                    f"{' + '.join([str(left)] * right)} = {answer}."
+                )
+
+    if not details or any(
+        marker in solution
+        for marker in (
+            "Let's unpack the arithmetic:",
+            "Let's unpack the decimals:",
+            "Let's show each division:",
+        )
+    ):
+        return solution
+    return insert_working_before_answer(solution, "Let's unpack the arithmetic:", details)
+
+
+def decimal_workings(solution):
+    pattern = re.compile(
+        r"(?<![\w.])(?P<left>\d+(?:\.\d+)?)\s*"
+        r"(?P<operator>[+−×÷-])\s*(?P<right>\d+(?:\.\d+)?)\s*"
+        r"=\s*(?:GH₵\s*)?(?P<answer>−?\d+(?:\.\d+)?)(?!\w|\.\d)"
+    )
+    details = []
+    seen = set()
+    for match in pattern.finditer(solution):
+        left_text = match.group("left")
+        right_text = match.group("right")
+        if "." not in left_text and "." not in right_text:
+            continue
+        operator = match.group("operator")
+        key = left_text, operator, right_text
+        if key in seen:
+            continue
+        seen.add(key)
+
+        left_digits = str(int(left_text.replace(".", "")))
+        right_digits = str(int(right_text.replace(".", "")))
+        left_places = len(left_text.partition(".")[2])
+        right_places = len(right_text.partition(".")[2])
+        if operator == "÷":
+            places = max(left_places, right_places)
+            multiplier = 10**places
+            dividend = int(Decimal(left_text) * multiplier)
+            divisor = int(Decimal(right_text) * multiplier)
+            details.append(
+                f"Make the divisor a whole number by multiplying both numbers "
+                f"by {multiplier}: {left_text} ÷ {right_text} = "
+                f"{dividend} ÷ {divisor}. This keeps the quotient unchanged.\n"
+                f"{division_working(dividend, divisor)}"
+            )
+        elif operator == "×":
+            product = int(left_digits) * int(right_digits)
+            decimal_places = left_places + right_places
+            product_text = str(product).zfill(decimal_places + 1)
+            answer_text = (
+                product_text[:-decimal_places] + "." + product_text[-decimal_places:]
+                if decimal_places
+                else product_text
+            )
+            details.append(
+                f"First multiply as whole numbers: {left_digits} × {right_digits} "
+                f"= {product}. There are {left_places} + {right_places} = "
+                f"{decimal_places} decimal places in the two factors, so put "
+                f"the decimal point {decimal_places} "
+                f"{'place' if decimal_places == 1 else 'places'} from the right: "
+                f"{answer_text}."
+            )
+        else:
+            places = max(left_places, right_places)
+            multiplier = 10**places
+            left_whole = int(Decimal(left_text) * multiplier)
+            right_whole = int(Decimal(right_text) * multiplier)
+            result_whole = (
+                left_whole + right_whole
+                if operator == "+"
+                else left_whole - right_whole
+            )
+            place_name = {1: "tenths", 2: "hundredths", 3: "thousandths"}.get(
+                places,
+                f"{places}-place decimal units",
+            )
+            details.append(
+                f"Write both numbers to the same number of decimal places: "
+                f"{left_text} and {right_text}. This makes each digit represent "
+                f"the same place value. In {place_name}, "
+                f"{left_whole} {'+' if operator == '+' else '−'} {right_whole} "
+                f"= {result_whole}. Put the decimal point back {places} "
+                f"{'place' if places == 1 else 'places'} from the right to "
+                f"get {match.group('answer')}."
+            )
+
+    if not details or "Let's unpack the decimals:" in solution:
+        return solution
+    return insert_working_before_answer(solution, "Let's unpack the decimals:", details)
+
+
+def show_fractions(solution):
+    solution = re.sub(
+           r"(?<![\w.\]])(\d+)\s*÷\s*(\d+)(?!\w|\.\d)" ,
+        r"[[frac:\1|\2]]",
+        solution,
+    )
+    return re.sub(
+        r"(?<![\w/])(\d+)/(\d+)(?![\w/])",
+        r"[[frac:\1|\2]]",
+        solution,
+    )
+
+
+def expand_solution(solution):
+    solution = decimal_workings(solution)
+    solution = arithmetic_workings(solution)
+    solution = add_division_workings(solution)
+    return show_fractions(solution)
+
+
 def make_question(kind, prompt, answer, distractors, solution, difficulty, variant):
+    solution = expand_solution(solution)
     options, correct_answer = build_options(answer, distractors, variant)
     data = {
         "kind": kind,
@@ -224,9 +567,12 @@ def question_for(topic, kind, index):
             common_factor = gcd(abs(combined_numerator), common_denominator)
             if common_factor > 1:
                 simplification = (
-                    f"Divide the top and bottom by {common_factor}: "
-                    f"{combined_numerator} ÷ {common_factor} over "
-                    f"{common_denominator} ÷ {common_factor} = {format_fraction(answer)}."
+                    f"Divide the numerator by {common_factor}: "
+                    f"{combined_numerator} ÷ {common_factor} = "
+                    f"{combined_numerator // common_factor}. Then divide the "
+                    f"denominator by {common_factor}: {common_denominator} ÷ "
+                    f"{common_factor} = {common_denominator // common_factor}. "
+                    f"The simplified fraction is {format_fraction(answer)}."
                 )
             else:
                 simplification = (

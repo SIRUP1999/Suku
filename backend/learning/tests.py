@@ -32,8 +32,157 @@ class MathematicsWorkedSolutionTests(SimpleTestCase):
         question = self.generator.question_for(topic, "mcq", 4)
 
         self.assertEqual(question["correct_answer"], "13/10")
-        self.assertIn("39/30", question["explanation"])
-        self.assertIn("39 ÷ 3 over 30 ÷ 3 = 13/10", question["explanation"])
+        self.assertIn("[[frac:39|30]]", question["explanation"])
+        self.assertIn("[[frac:39|3]]", question["explanation"])
+        self.assertIn("[[frac:30|3]]", question["explanation"])
+        self.assertIn("The quotient digits make 13", question["explanation"])
+        self.assertIn("The quotient digits make 10", question["explanation"])
+
+    def test_integer_division_shows_fraction_and_long_division_steps(self):
+        topic = SimpleNamespace(title="Ratio and rate", grade=7)
+
+        question = self.generator.question_for(topic, "mcq", 0)
+
+        self.assertIn("[[frac:128|8]]", question["explanation"])
+        self.assertIn("Bring down the next digit 8", question["explanation"])
+        self.assertIn("8 × 6 = 48", question["explanation"])
+        self.assertIn("48 − 48 = 0", question["explanation"])
+
+    def test_verbal_division_step_shows_the_missing_dividend(self):
+        explanation = self.generator.expand_solution(
+            "Divide both sides by 3: x = 4.\nAnswer: x = 4."
+        )
+
+        self.assertIn("3 × 4 = 12", explanation)
+        self.assertIn("[[frac:12|3]]", explanation)
+        self.assertIn("12 − 12 = 0", explanation)
+        self.assertLess(explanation.index("Long division:"), explanation.index("Answer:"))
+
+    def test_subtraction_working_explains_compensation(self):
+        explanation = self.generator.expand_solution("Calculate 35 − 8 = 27.")
+
+        self.assertIn("Regroup 1 ten as 10 ones", explanation)
+        self.assertIn("Ones: 15 − 8 = 7 ones", explanation)
+        self.assertIn("Tens: 2 − 0 = 2 tens", explanation)
+        self.assertIn("Combine the place values to get 27", explanation)
+
+    def test_fraction_answers_render_as_stacked_fraction_markers(self):
+        explanation = self.generator.expand_solution("Probability = 7/22.")
+
+        self.assertIn("[[frac:7|22]]", explanation)
+
+    def test_decimal_operations_show_place_value_working(self):
+        addition = self.generator.expand_solution("3.75 + 0.608 = 4.358.")
+        multiplication = self.generator.expand_solution("0.6 × 0.05 = 0.03.")
+        division = self.generator.expand_solution("2.4 ÷ 0.6 = 4.")
+
+        self.assertIn("3750 + 608 = 4358", addition)
+        self.assertIn("3 places from the right", addition)
+        self.assertIn("6 × 5 = 30", multiplication)
+        self.assertIn("3 decimal places", multiplication)
+        self.assertIn("2.4 ÷ 0.6 = 4", division)
+        self.assertIn("[[frac:24|6]]", division)
+        self.assertIn("The quotient digits make 4", division)
+
+    def test_solution_expansion_is_idempotent(self):
+        source = "Share GH₵128 equally: GH₵128 ÷ 8 = GH₵16."
+
+        once = self.generator.expand_solution(source)
+        twice = self.generator.expand_solution(once)
+
+        self.assertEqual(twice, once)
+
+    def test_detailed_working_migration_updates_generated_and_fixed_solutions(self):
+        topic = SimpleNamespace(title="Ratio and rate", grade=7, slug="ratio-rate")
+        generated = self.generator.question_for(topic, "mcq", 0)
+        generated_question = SimpleNamespace(
+            id=1,
+            prompt=generated["prompt"],
+            explanation="Old generated solution",
+            options=list(generated["options"]),
+        )
+        fixed_question = SimpleNamespace(
+            id=2,
+            prompt="Calculate 35 − 8.",
+            explanation="Subtract 8 from 35: 35 − 8 = 27.",
+            options=["27", "28", "37", "43"],
+        )
+        subject_model = SimpleNamespace(objects=MagicMock())
+        subject_model.objects.get.return_value = object()
+        topic_model = SimpleNamespace(objects=MagicMock())
+        topic_model.objects.filter.return_value.iterator.return_value = [topic]
+        question_model = SimpleNamespace(objects=MagicMock())
+        question_model.objects.filter.return_value.only.return_value.iterator.return_value = [
+            generated_question,
+            fixed_question,
+        ]
+        apps = SimpleNamespace(
+            get_model=lambda app, model: {
+                "Subject": subject_model,
+                "Topic": topic_model,
+                "Question": question_model,
+            }[model]
+        )
+        migration = import_module(
+            "learning.migrations.0015_detail_mathematics_solution_workings"
+        )
+
+        migration.backfill_detailed_workings(apps, None)
+
+        self.assertIn("Let's show each division:", generated_question.explanation)
+        self.assertIn("[[frac:128|8]]", generated_question.explanation)
+        self.assertIn("Regroup", fixed_question.explanation)
+        self.assertEqual(generated_question.options, generated["options"])
+        self.assertEqual(fixed_question.options, ["27", "28", "37", "43"])
+        question_model.objects.bulk_update.assert_called_once_with(
+            [generated_question, fixed_question],
+            fields=("explanation",),
+            batch_size=500,
+        )
+
+    def test_detailed_working_migration_includes_paper_two(self):
+        topic = SimpleNamespace(
+            title="BECE Paper 2: Structured Mathematics",
+            grade=9,
+            slug="g9-paper-2-written-practice",
+        )
+        question = SimpleNamespace(
+            id=1,
+            prompt="Solve x + y = 17 and x - y = 5.",
+            explanation=(
+                "Step 3: Divide both sides by 2: x = 11.\n"
+                "Answer: x = 11."
+            ),
+            options=[],
+        )
+        subject_model = SimpleNamespace(objects=MagicMock())
+        subject_model.objects.get.return_value = object()
+        topic_model = SimpleNamespace(objects=MagicMock())
+        topic_model.objects.filter.return_value.iterator.return_value = [topic]
+        question_model = SimpleNamespace(objects=MagicMock())
+        question_model.objects.filter.return_value.only.return_value.iterator.return_value = [
+            question
+        ]
+        apps = SimpleNamespace(
+            get_model=lambda app, model: {
+                "Subject": subject_model,
+                "Topic": topic_model,
+                "Question": question_model,
+            }[model]
+        )
+        migration = import_module(
+            "learning.migrations.0015_detail_mathematics_solution_workings"
+        )
+
+        migration.backfill_detailed_workings(apps, None)
+
+        self.assertIn("[[frac:22|2]]", question.explanation)
+        self.assertIn("Long division:", question.explanation)
+        self.assertEqual(question.explanation.count("Subtract: 2 − 2 = 0"), 2)
+        self.assertLess(
+            question.explanation.index("Long division:"),
+            question.explanation.index("Answer:"),
+        )
 
     def test_fraction_topic_uses_distinct_question_formats(self):
         topic = SimpleNamespace(title="Fractions", grade=7)

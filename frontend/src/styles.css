@@ -191,6 +191,9 @@ button:focus-visible, input:focus-visible { outline: 3px solid #8bb8a0; outline-
 .solution-check { background: #f2f5ef; color: #52634f; }
 .solution-answer { background: #e9f3e9; color: #285b37; }
 .solution-note strong { font-weight: 700; }
+.solution-fraction { display: inline-grid; grid-template-rows: auto auto; vertical-align: middle; margin: 0 3px; text-align: center; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.solution-fraction > span:first-child { border-bottom: 1px solid currentColor; padding: 0 3px 1px; }
+.solution-fraction > span:last-child { padding: 1px 3px 0; }
 .solution-section { display: grid; gap: 3px; padding: 9px 11px; border-left: 3px solid #83a98a; border-radius: 5px; background: #f5f7f2; color: #43564a; font-size: 12px; line-height: 1.55; }
 .solution-section strong { color: #355b40; font-size: 10px; letter-spacing: .06em; }
 .solution-spacing { height: 3px; }

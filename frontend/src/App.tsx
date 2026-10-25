@@ -407,6 +407,25 @@ function Lesson({ topic, canPractice, objectiveCount, theoryCount, onBack, onPra
   </>;
 }
 
+function renderSolutionContent(content: string) {
+  return content.split(/(\[\[frac:\d+\|\d+\]\])/g).map((part, index) => {
+    const fraction = part.match(/^\[\[frac:(\d+)\|(\d+)\]\]$/);
+    if (!fraction) return part;
+
+    return (
+      <span
+        className="solution-fraction"
+        key={index}
+        role="math"
+        aria-label={`${fraction[1]} over ${fraction[2]}`}
+      >
+        <span>{fraction[1]}</span>
+        <span>{fraction[2]}</span>
+      </span>
+    );
+  });
+}
+
 function WorkedSolution({ text }: { text: string }) {
   return (
     <div className="worked-solution">
@@ -419,7 +438,7 @@ function WorkedSolution({ text }: { text: string }) {
           return (
             <div className="solution-step" key={index}>
               <span className="solution-step-number">{step[1]}</span>
-              <p>{step[2]}</p>
+              <p>{renderSolutionContent(step[2])}</p>
             </div>
           );
         }
@@ -430,7 +449,7 @@ function WorkedSolution({ text }: { text: string }) {
           return (
             <div className={`solution-note ${isAnswer ? "solution-answer" : "solution-check"}`} key={index}>
               <strong>{isAnswer ? "Answer" : "Check"}</strong>
-              <span>{note[2]}</span>
+              <span>{renderSolutionContent(note[2])}</span>
             </div>
           );
         }
@@ -440,7 +459,7 @@ function WorkedSolution({ text }: { text: string }) {
           return (
             <div className="solution-section" key={index}>
               <strong>{section[1]}</strong>
-              <span>{section[2]}</span>
+              <span>{renderSolutionContent(section[2])}</span>
             </div>
           );
         }
@@ -449,7 +468,7 @@ function WorkedSolution({ text }: { text: string }) {
           return <h3 className="solution-heading" key={index}>{content}</h3>;
         }
 
-        return <p className="solution-paragraph" key={index}>{content}</p>;
+        return <p className="solution-paragraph" key={index}>{renderSolutionContent(content)}</p>;
       })}
     </div>
   );
