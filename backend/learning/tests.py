@@ -1,6 +1,8 @@
 import base64
 import json
 from datetime import timedelta
+from importlib import import_module
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from urllib.request import Request
 
@@ -14,6 +16,192 @@ from rest_framework.test import APITestCase
 from learning.models import Attempt, Question, Subject, Topic
 from learning.ai import check_written_work
 from schools.models import School, SchoolClass, TermSubscription, User
+
+
+class MathematicsWorkedSolutionTests(SimpleTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.generator = import_module(
+            "learning.migrations.0009_expand_mathematics_topic_practice"
+        )
+
+    def test_fraction_solution_shows_common_denominator_and_reduction(self):
+        topic = SimpleNamespace(title="Fractions", grade=7)
+
+        question = self.generator.question_for(topic, "mcq", 4)
+
+        self.assertEqual(question["correct_answer"], "13/10")
+        self.assertIn("39/30", question["explanation"])
+        self.assertIn("39 ÷ 3 over 30 ÷ 3 = 13/10", question["explanation"])
+
+    def test_fraction_topic_uses_distinct_question_formats(self):
+        topic = SimpleNamespace(title="Fractions", grade=7)
+
+        questions = [self.generator.question_for(topic, "mcq", index) for index in range(4)]
+
+        self.assertEqual(
+            [question["correct_answer"] for question in questions],
+            ["23/20", "7/20", "3/10", "15/8"],
+        )
+        self.assertEqual(len({question["prompt"] for question in questions}), 4)
+        self.assertIn("RULE:", questions[0]["explanation"])
+        self.assertIn("IDEA:", questions[2]["explanation"])
+        self.assertIn("DIVISION RULE:", questions[3]["explanation"])
+
+    def test_topics_generate_four_distinct_question_styles(self):
+        topics = [
+            ("Ratio and rate", 7),
+            ("Whole numbers and factors", 7),
+            ("Decimal fractions", 7),
+            ("Exponents and powers", 8),
+            ("Integers", 7),
+            ("Patterns", 8),
+            ("Geometric constructions", 7),
+            ("Angles", 7),
+            ("Surface area and volume", 9),
+            ("Measurement", 7),
+            ("Data handling", 8),
+            ("Position and transformation", 9),
+            ("Variables and formulas", 9),
+            ("Algebraic expressions", 8),
+            ("Real numbers and integers", 9),
+            ("Simultaneous equations", 9),
+        ]
+
+        for title, grade in topics:
+            with self.subTest(topic=title):
+                questions = [
+                    self.generator.question_for(
+                        SimpleNamespace(title=title, grade=grade),
+                        "mcq",
+                        index,
+                    )
+                    for index in range(4)
+                ]
+                self.assertEqual(len({question["prompt"] for question in questions}), 4)
+                for question in questions:
+                    self.assertIn(question["correct_answer"], question["options"])
+
+    def test_unmatched_topics_rotate_between_prompt_styles(self):
+        topic = SimpleNamespace(title="New topic challenge", grade=7)
+
+        questions = [
+            self.generator.question_for(topic, "mcq", index)
+            for index in range(4)
+        ]
+
+        prompts = [question["prompt"] for question in questions]
+        self.assertEqual(len(set(prompts)), 4)
+        self.assertTrue(any("How many" in prompt for prompt in prompts))
+        self.assertTrue(any("number sentence" in prompt.lower() for prompt in prompts))
+
+    def test_ratio_solution_explains_parts_and_checks_total(self):
+        topic = SimpleNamespace(title="Ratio and rate", grade=7)
+
+        question = self.generator.question_for(topic, "mcq", 0)
+
+        self.assertEqual(question["correct_answer"], "GH₵80")
+        self.assertIn("3:5 means 8 equal parts", question["explanation"])
+        self.assertIn("GH₵80 + GH₵48 = GH₵128", question["explanation"])
+
+    def test_angle_solution_checks_the_triangle_angle_sum(self):
+        topic = SimpleNamespace(title="Angles", grade=7)
+
+        question = self.generator.question_for(topic, "mcq", 0)
+
+        self.assertIn("third angle is 70°", question["explanation"])
+        self.assertIn("45° + 65° + 70° = 180°", question["explanation"])
+
+    def test_straight_line_angle_solution_checks_the_equation(self):
+        topic = SimpleNamespace(title="Angles", grade=7)
+
+        question = self.generator.question_for(topic, "mcq", 50)
+
+        self.assertEqual(question["correct_answer"], "23")
+        self.assertIn("x + 88", question["prompt"])
+        self.assertIn("69° + 111° = 180°", question["explanation"])
+
+    def test_backfill_changes_only_matching_question_explanation(self):
+        topic = SimpleNamespace(title="Fractions", grade=7, slug="fractions")
+        generated = self.generator.question_for(topic, "mcq", 1)
+        original_options = list(generated["options"])
+        question = SimpleNamespace(
+            id=1,
+            prompt=generated["prompt"],
+            explanation="Older explanation",
+            correct_answer=generated["correct_answer"],
+            options=original_options,
+        )
+
+        subject_model = SimpleNamespace(objects=MagicMock())
+        subject_model.objects.get.return_value = object()
+        topic_model = SimpleNamespace(objects=MagicMock())
+        topic_model.objects.filter.return_value.exclude.return_value.iterator.return_value = [
+            topic
+        ]
+        question_model = SimpleNamespace(objects=MagicMock())
+        question_model.objects.filter.return_value.only.return_value.iterator.return_value = [
+            question
+        ]
+        apps = SimpleNamespace(
+            get_model=lambda app, model: {
+                "Subject": subject_model,
+                "Topic": topic_model,
+                "Question": question_model,
+            }[model]
+        )
+        migration = import_module(
+            "learning.migrations.0013_improve_mathematics_worked_solutions"
+        )
+
+        migration.improve_mathematics_solutions(apps, None)
+
+        self.assertEqual(question.explanation, generated["explanation"])
+        self.assertEqual(question.correct_answer, generated["correct_answer"])
+        self.assertEqual(question.options, original_options)
+        question_model.objects.bulk_update.assert_called_once_with(
+            [question],
+            fields=("explanation",),
+            batch_size=500,
+        )
+
+    def test_backfill_matches_theory_question_after_prompt_cleanup(self):
+        topic = SimpleNamespace(title="Fractions", grade=7, slug="fractions")
+        generated = self.generator.question_for(topic, "theory", 0)
+        question = SimpleNamespace(
+            id=1,
+            prompt=generated["prompt"],
+            explanation="Older explanation",
+            correct_answer=generated["correct_answer"],
+            options=list(generated["options"]),
+        )
+        subject_model = SimpleNamespace(objects=MagicMock())
+        subject_model.objects.get.return_value = object()
+        topic_model = SimpleNamespace(objects=MagicMock())
+        topic_model.objects.filter.return_value.exclude.return_value.iterator.return_value = [
+            topic
+        ]
+        question_model = SimpleNamespace(objects=MagicMock())
+        question_model.objects.filter.return_value.only.return_value.iterator.return_value = [
+            question
+        ]
+        apps = SimpleNamespace(
+            get_model=lambda app, model: {
+                "Subject": subject_model,
+                "Topic": topic_model,
+                "Question": question_model,
+            }[model]
+        )
+        migration = import_module(
+            "learning.migrations.0013_improve_mathematics_worked_solutions"
+        )
+
+        migration.improve_mathematics_solutions(apps, None)
+
+        self.assertEqual(question.explanation, generated["explanation"])
+        self.assertEqual(question.correct_answer, generated["correct_answer"])
+        question_model.objects.bulk_update.assert_called_once()
 
 
 class GeminiWorkCheckTests(SimpleTestCase):
@@ -653,7 +841,7 @@ class LearningFlowTests(APITestCase):
             grades.add(topic.grade)
             self.assertEqual(
                 topic.questions.filter(is_published=True, kind=Question.Kind.MCQ).count(),
-                40,
+                56,
                 topic.title,
             )
             self.assertEqual(
@@ -661,12 +849,12 @@ class LearningFlowTests(APITestCase):
                     is_published=True,
                     kind=Question.Kind.MCQ,
                 ).values_list("prompt", flat=True).distinct().count(),
-                40,
+                56,
                 topic.title,
             )
             self.assertEqual(
                 topic.questions.filter(is_published=True, kind=Question.Kind.THEORY).count(),
-                10,
+                18,
                 topic.title,
             )
             objective_difficulties = {
@@ -681,12 +869,12 @@ class LearningFlowTests(APITestCase):
                     Question.Difficulty.HARD,
                 )
             }
-            self.assertEqual(objective_difficulties, {"easy": 10, "medium": 20, "hard": 10})
+            self.assertEqual(objective_difficulties, {"easy": 10, "medium": 20, "hard": 26})
             for question in topic.questions.filter(is_published=True):
                 self.assertEqual(len(question.options), 4, question.prompt)
                 self.assertEqual(len(question.options), len(set(question.options)), question.prompt)
                 self.assertIn(question.correct_answer, question.options, question.prompt)
-                self.assertIn("Step 1:", question.explanation, question.prompt)
+                self.assertTrue(question.explanation.strip(), question.prompt)
                 if question.kind == Question.Kind.THEORY:
                     self.assertNotIn("BECE-style structured practice", question.prompt, topic.title)
                     self.assertNotIn("(a) State the rule", question.prompt, topic.title)

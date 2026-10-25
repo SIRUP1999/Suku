@@ -435,6 +435,16 @@ function WorkedSolution({ text }: { text: string }) {
           );
         }
 
+        const section = content.match(/^([A-Z][A-Z -]{1,})\s*:\s*(.*)$/);
+        if (section) {
+          return (
+            <div className="solution-section" key={index}>
+              <strong>{section[1]}</strong>
+              <span>{section[2]}</span>
+            </div>
+          );
+        }
+
         if (/^(Question\s+\d+|\([a-d]\)|\[[a-d]\])/i.test(content)) {
           return <h3 className="solution-heading" key={index}>{content}</h3>;
         }
