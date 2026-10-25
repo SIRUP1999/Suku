@@ -407,6 +407,44 @@ function Lesson({ topic, canPractice, objectiveCount, theoryCount, onBack, onPra
   </>;
 }
 
+function WorkedSolution({ text }: { text: string }) {
+  return (
+    <div className="worked-solution">
+      {text.split(/\r?\n/).map((line, index) => {
+        const content = line.trim();
+        if (!content) return <div key={index} className="solution-spacing" aria-hidden="true" />;
+
+        const step = content.match(/^Step\s+(\d+)\s*:\s*(.*)$/i);
+        if (step) {
+          return (
+            <div className="solution-step" key={index}>
+              <span className="solution-step-number">{step[1]}</span>
+              <p>{step[2]}</p>
+            </div>
+          );
+        }
+
+        const note = content.match(/^(Check|Answer)\s*:\s*(.*)$/i);
+        if (note) {
+          const isAnswer = note[1].toLowerCase() === "answer";
+          return (
+            <div className={`solution-note ${isAnswer ? "solution-answer" : "solution-check"}`} key={index}>
+              <strong>{isAnswer ? "Answer" : "Check"}</strong>
+              <span>{note[2]}</span>
+            </div>
+          );
+        }
+
+        if (/^(Question\s+\d+|\([a-d]\)|\[[a-d]\])/i.test(content)) {
+          return <h3 className="solution-heading" key={index}>{content}</h3>;
+        }
+
+        return <p className="solution-paragraph" key={index}>{content}</p>;
+      })}
+    </div>
+  );
+}
+
 function Quiz({ topic, questions, onBack, onError }: { topic: Topic; questions: Question[]; onBack: () => void; onError: (message: string) => void }) {
   const [index, setIndex] = useState(0);
   const [selected, setSelected] = useState("");
@@ -535,7 +573,7 @@ function Quiz({ topic, questions, onBack, onError }: { topic: Topic; questions: 
             <p>{result.feedback}</p>
             {result.correct_answer && <p className="correct-answer"><strong>Correct answer:</strong> {result.correct_answer}</p>}
             {question.kind === "theory" && result.mark_guide && <div className="solution-copy"><strong>Mark guide</strong><p>{result.mark_guide}</p></div>}
-            {result.worked_solution && <div className="solution-copy"><strong>Worked solution</strong><p>{result.worked_solution}</p></div>}
+            {result.worked_solution && <div className="solution-copy"><strong>Worked solution</strong><WorkedSolution text={result.worked_solution} /></div>}
             {question.kind === "theory" && !isWrittenPaper && question.work_check_available && <form className="work-upload" onSubmit={checkWork}>
               <label htmlFor="written-work"><FileText size={16} /> Optional: upload your working as a PDF for AI feedback</label>
               <input id="written-work" type="file" accept="application/pdf,.pdf" onChange={(event) => { setWorkFile(event.target.files?.[0] ?? null); setWorkCheck(null); }} />
